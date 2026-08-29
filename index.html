@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fcfcfb">
+<title>ASINスキャナ｜FC物販</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ASINスキャナ">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">▮▯▮</span>
+    <span class="brand-name">ASINスキャナ</span>
+    <span class="brand-ver" id="app-version">v–</span>
+  </div>
+  <button type="button" class="icon-btn" id="btn-settings" aria-label="設定">⚙</button>
+</header>
+
+<main id="main">
+
+  <!-- ============ スキャン画面 ============ -->
+  <section id="view-scan" class="view">
+    <div class="scanner-frame" id="scanner-frame" hidden>
+      <video id="video" playsinline muted></video>
+      <div class="scan-guide" aria-hidden="true"><span class="scan-line"></span></div>
+      <div class="scan-tools">
+        <button type="button" class="pill" id="btn-torch" hidden>ライト</button>
+        <button type="button" class="pill" id="btn-stop-cam">停止</button>
+      </div>
+      <p class="scan-status" id="scan-status" role="status"></p>
+    </div>
+
+    <div class="scan-actions">
+      <button type="button" class="btn btn-primary btn-big" id="btn-start-cam">
+        カメラでスキャン
+      </button>
+      <label class="btn btn-ghost btn-big" id="label-photo">
+        写真を撮って読む
+        <input type="file" id="input-photo" accept="image/*" capture="environment" hidden>
+      </label>
+    </div>
+
+    <form class="manual" id="form-manual">
+      <label for="input-code">JAN / ASIN を直接入力</label>
+      <div class="manual-row">
+        <input type="text" id="input-code" inputmode="search" autocomplete="off"
+               placeholder="4901777018686 または B0ABC12345" enterkeyhint="search">
+        <button type="submit" class="btn btn-primary">調べる</button>
+      </div>
+      <p class="hint">パソコンのバーコードリーダー（USB）もここに読ませられます。</p>
+    </form>
+
+    <div id="setup-warning" class="notice notice-warn" hidden></div>
+
+    <section class="history" id="history-block" hidden>
+      <div class="section-head">
+        <h2>スキャン履歴</h2>
+        <div class="section-tools">
+          <button type="button" class="pill" id="btn-export">CSV</button>
+          <button type="button" class="pill" id="btn-clear-history">全消去</button>
+        </div>
+      </div>
+      <ul class="history-list" id="history-list"></ul>
+    </section>
+  </section>
+
+  <!-- ============ 結果画面 ============ -->
+  <section id="view-result" class="view" hidden>
+    <button type="button" class="back-link" id="btn-back">← スキャンに戻る</button>
+
+    <div id="loading" class="loading" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="loading-text">Keepaに問い合わせ中…</span>
+    </div>
+
+    <div id="error-box" class="notice notice-error" hidden></div>
+
+    <!-- JANが複数ASINに当たったときの候補選択 -->
+    <div id="candidates" class="card" hidden>
+      <h2>候補が複数あります</h2>
+      <p class="hint">このJANに複数のASINが紐づいています。出品するものを選んでください。</p>
+      <ul class="candidate-list" id="candidate-list"></ul>
+    </div>
+
+    <article id="result" hidden>
+
+      <div class="verdict" id="verdict">
+        <div class="verdict-head">
+          <span class="verdict-icon" id="verdict-icon" aria-hidden="true"></span>
+          <span class="verdict-label" id="verdict-label"></span>
+        </div>
+        <ul class="reasons" id="reasons"></ul>
+      </div>
+
+      <div class="card product">
+        <img id="product-image" class="product-img" alt="" hidden>
+        <div class="product-body">
+          <h1 id="product-title">—</h1>
+          <p class="product-meta">
+            <span id="product-asin" class="mono"></span>
+            <span id="product-brand"></span>
+            <span id="product-category"></span>
+          </p>
+          <p class="product-links">
+            <a id="link-amazon" href="#" target="_blank" rel="noopener">Amazon</a>
+            <a id="link-keepa" href="#" target="_blank" rel="noopener">Keepa</a>
+            <a id="link-seller" href="#" target="_blank" rel="noopener">セラセンで規制確認</a>
+          </p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>いまの状況</h2>
+        <div class="stats" id="stats"></div>
+      </div>
+
+      <div class="card">
+        <h2>手数料と手残り</h2>
+        <div class="inputs">
+          <label class="field">
+            <span>想定売価</span>
+            <input type="number" id="in-price" inputmode="numeric" min="0" step="1">
+          </label>
+          <label class="field">
+            <span>仕入値（実質）</span>
+            <input type="number" id="in-cost" inputmode="numeric" min="0" step="1" placeholder="0">
+          </label>
+          <label class="field">
+            <span>紹介料 %</span>
+            <input type="number" id="in-referral" inputmode="decimal" min="0" max="99" step="0.01">
+          </label>
+          <label class="field">
+            <span>FBA手数料</span>
+            <input type="number" id="in-fba" inputmode="numeric" min="0" step="1">
+          </label>
+          <label class="field">
+            <span>その他費用</span>
+            <input type="number" id="in-other" inputmode="numeric" min="0" step="1">
+          </label>
+          <label class="field field-check">
+            <input type="checkbox" id="in-tax">
+            <span>紹介料に消費税10%を足す</span>
+          </label>
+        </div>
+        <p class="hint" id="fee-source"></p>
+
+        <table class="breakdown">
+          <tbody>
+            <tr><th>想定売価</th><td id="bd-price">—</td></tr>
+            <tr><th>販売手数料（紹介料）</th><td id="bd-referral">—</td></tr>
+            <tr><th>FBA配送代行手数料</th><td id="bd-fba">—</td></tr>
+            <tr><th>その他費用</th><td id="bd-other">—</td></tr>
+            <tr class="row-strong"><th>手残り（仕入前）</th><td id="bd-net">—</td></tr>
+            <tr><th>仕入値</th><td id="bd-cost">—</td></tr>
+          </tbody>
+        </table>
+
+        <div class="profit-row">
+          <div class="profit-main">
+            <span class="profit-label">粗利</span>
+            <strong class="profit-value" id="bd-profit">—</strong>
+          </div>
+          <div class="profit-sub">
+            <span>利益率 <strong id="bd-margin">—</strong></span>
+            <span>ROI <strong id="bd-roi">—</strong></span>
+          </div>
+        </div>
+        <p class="hint">保管料・返送料・広告費は含みません。必要なら「その他費用」に入れてください。</p>
+      </div>
+
+      <div class="card" id="card-charts">
+        <div class="section-head">
+          <h2>推移</h2>
+          <div class="range-tabs" id="range-tabs" role="group" aria-label="表示期間">
+            <button type="button" data-days="30">30日</button>
+            <button type="button" data-days="90">90日</button>
+            <button type="button" data-days="180">180日</button>
+            <button type="button" data-days="0">全期間</button>
+          </div>
+        </div>
+
+        <figure class="chart-figure">
+          <figcaption>価格</figcaption>
+          <div class="legend" id="legend-price"></div>
+          <div class="chart-wrap">
+            <canvas id="chart-price" height="170"></canvas>
+            <div class="tooltip" id="tip-price" hidden></div>
+          </div>
+        </figure>
+
+        <figure class="chart-figure">
+          <figcaption>新品出品者数<span class="cap-note">（多いほど価格競争になりやすい）</span></figcaption>
+          <div class="chart-wrap">
+            <canvas id="chart-sellers" height="140"></canvas>
+            <div class="tooltip" id="tip-sellers" hidden></div>
+          </div>
+        </figure>
+
+        <figure class="chart-figure">
+          <figcaption>売れ筋ランキング<span class="cap-note">（上にあるほど売れている）</span></figcaption>
+          <div class="chart-wrap">
+            <canvas id="chart-rank" height="140"></canvas>
+            <div class="tooltip" id="tip-rank" hidden></div>
+          </div>
+        </figure>
+
+        <details class="table-view">
+          <summary>数値で見る</summary>
+          <div class="table-scroll">
+            <table class="data-table" id="data-table"></table>
+          </div>
+        </details>
+      </div>
+
+      <div class="card sticky-save">
+        <button type="button" class="btn btn-primary btn-big" id="btn-save">履歴に保存して次をスキャン</button>
+      </div>
+    </article>
+  </section>
+
+  <!-- ============ 設定画面 ============ -->
+  <section id="view-settings" class="view" hidden>
+    <button type="button" class="back-link" id="btn-settings-back">← 戻る</button>
+    <form class="card" id="form-settings">
+      <h2>接続</h2>
+      <label class="field-block">
+        <span>Keepa APIキー</span>
+        <input type="password" id="set-keepa" autocomplete="off" placeholder="Keepaの管理画面で取得">
+        <small>この端末の中だけに保存されます。サーバーには送りません。</small>
+      </label>
+      <label class="field-block">
+        <span>GASウェブアプリURL</span>
+        <input type="url" id="set-gas" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
+        <small>出品規制（SP-API）の判定に使います。空でも他の機能は動きます。</small>
+      </label>
+      <label class="field-check">
+        <input type="checkbox" id="set-proxy">
+        <span>KeepaをGAS経由で取得する（APIキーを端末に置かない）</span>
+      </label>
+      <label class="field-check">
+        <input type="checkbox" id="set-offers">
+        <span>出品者一覧まで取得する（Keepaトークンを多く使う）</span>
+      </label>
+
+      <h2>利益計算</h2>
+      <label class="field-check">
+        <input type="checkbox" id="set-tax">
+        <span>紹介料に消費税10%を足す</span>
+      </label>
+      <label class="field-block">
+        <span>その他費用の既定値（円）</span>
+        <input type="number" id="set-other" inputmode="numeric" min="0" step="1">
+      </label>
+
+      <h2>仕入れ判定のライン</h2>
+      <div class="grid2">
+        <label class="field-block"><span>目標利益率（%）</span>
+          <input type="number" id="set-margin" inputmode="decimal" min="0" step="0.5"></label>
+        <label class="field-block"><span>最低粗利（円）</span>
+          <input type="number" id="set-profit" inputmode="numeric" min="0" step="10"></label>
+        <label class="field-block"><span>30日の最低販売数</span>
+          <input type="number" id="set-drops" inputmode="numeric" min="0" step="1"></label>
+        <label class="field-block"><span>新品出品者数の上限</span>
+          <input type="number" id="set-sellers" inputmode="numeric" min="0" step="1"></label>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-big">保存</button>
+      <p class="hint" id="settings-saved" hidden>保存しました。</p>
+    </form>
+  </section>
+
+</main>
+
+<script src="vendor/zxing.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
