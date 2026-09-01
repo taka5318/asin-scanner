@@ -429,3 +429,17 @@ canvas { width: 100%; display: block; touch-action: pan-y; }
   .product-img { width: 96px; height: 96px; }
   .stats { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* 設定画面: Keepaキーの取り込み状況 */
+.key-status {
+  margin: 2px 0 6px;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--plane);
+  border: 1px solid var(--border);
+}
+.key-status.is-ok { border-color: var(--good); }
+.key-status.is-warn { border-color: var(--warning); }
+.key-manual summary { font-size: 12.5px; color: var(--series-1); cursor: pointer; }
+.key-manual input { margin-top: 6px; }

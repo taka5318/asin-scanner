@@ -231,15 +231,21 @@
     <form class="card" id="form-settings">
       <h2>接続</h2>
       <label class="field-block">
-        <span>Keepa APIキー</span>
-        <input type="password" id="set-keepa" autocomplete="off" placeholder="Keepaの管理画面で取得">
-        <small>この端末の中だけに保存されます。サーバーには送りません。</small>
-      </label>
-      <label class="field-block">
-        <span>GASウェブアプリURL</span>
+        <span>GASウェブアプリURL<b>（入力はここだけ）</b></span>
         <input type="url" id="set-gas" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
-        <small>出品規制（SP-API）の判定に使います。空でも他の機能は動きます。</small>
+        <small>仕入れSKUキャプチャで使っている <code>…/exec</code> と同じURL。
+          出品規制（SP-API）の判定と、KeepaのAPIキーの取り込みに使います。</small>
       </label>
+
+      <div class="field-block">
+        <span>Keepa APIキー</span>
+        <p class="key-status" id="keepa-key-status">—</p>
+        <details class="key-manual">
+          <summary>キーを直接入れる（ふつうは不要）</summary>
+          <input type="password" id="set-keepa" autocomplete="off" placeholder="GASのキーを使わず、この端末専用のキーを使うとき">
+          <small>入れるとGASから取り込んだキーより優先されます。この端末の中だけに保存されます。</small>
+        </details>
+      </div>
       <label class="field-check">
         <input type="checkbox" id="set-proxy">
         <span>KeepaをGAS経由で取得する（APIキーを端末に置かない）</span>

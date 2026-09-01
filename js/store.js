@@ -10,7 +10,12 @@ const HISTORY_KEY = 'asinScanner.history.v1';
 const HISTORY_LIMIT = 300;
 
 export const DEFAULT_SETTINGS = {
+  // 手入力のKeepaキー。空でよい（ふつうはGASから降りてくる方を使う）
   keepaApiKey: '',
+  // GASの共有設定(SHOP_CONFIG.keepaKey)から自動で降りてきたキー。
+  // 仕入れSKUキャプチャが全端末で同期しているものを流用するので、
+  // 社長が入力するのは gasUrl だけで済む
+  syncedKeepaKey: '',
   gasUrl: '',
   preferProxy: false,       // trueならKeepaをGAS経由で引く（キーを端末に置きたくないとき）
   fetchOffers: false,       // 出品者一覧まで取る（Keepaのトークンを多く消費する）

@@ -1,14 +1,14 @@
 // =====================================================================
 //  ASINスキャナ — 画面まわりの制御
 // =====================================================================
-import { fetchProducts, fetchRestriction, sliceSince } from './keepa.js';
+import { fetchProducts, fetchRestriction, fetchSharedConfig, sliceSince } from './keepa.js';
 import { calcProfit, judge, judgeLabel } from './profit.js';
 import { TimeChart } from './chart.js';
 import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normalizeCode, unlockFeedbackAudio } from './scanner.js';
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.1.0';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -33,27 +33,83 @@ function init() {
   $('app-version').textContent = 'v' + APP_VERSION;
   state.rangeDays = state.settings.rangeDays || 90;
 
+  adoptGasUrlFromLink();
+
   buildCharts();
   bindScanView();
   bindResultView();
   bindSettingsView();
   renderHistory();
   checkSetup();
+  syncFromGas();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* オフライン化は無くても動く */ });
   }
 }
 
+// 実際にKeepaへ使うキー。手入力があればそれを優先し、無ければGASから降りてきた方を使う
+function effectiveKeepaKey() {
+  return state.settings.keepaApiKey || state.settings.syncedKeepaKey || '';
+}
+
+/**
+ * GASの共有設定からKeepaのAPIキーを取ってくる。
+ * 仕入れSKUキャプチャが全端末で同期しているキーをそのまま使うので、
+ * スキャナ側で入力するのはGASのURLだけで済む（毎回キーを打たなくてよい）。
+ */
+async function syncFromGas() {
+  if (!state.settings.gasUrl) return;
+  try {
+    const cfg = await fetchSharedConfig(state.settings.gasUrl);
+    if (cfg.keepaKey && cfg.keepaKey !== state.settings.syncedKeepaKey) {
+      state.settings.syncedKeepaKey = cfg.keepaKey;
+      store.saveSettings(state.settings);
+    }
+    state.gasVersion = cfg.gasVersion;
+  } catch (e) {
+    state.gasError = String(e.message || e);
+  }
+  checkSetup();
+  updateKeepaKeyStatus();
+}
+
+// 別の端末やPCから渡されたリンクにGASのURLが入っていたら、それを取り込む。
+//   https://…/asin-scanner/?gas=https%3A%2F%2Fscript.google.com%2F…%2Fexec
+// 取り込んだらアドレスバーからは消す（URLを見られてもGASのURLが残らないように）
+function adoptGasUrlFromLink() {
+  try {
+    const params = new URLSearchParams(location.search);
+    const gas = params.get('gas');
+    if (gas && /^https:\/\/script\.google\.com\//.test(gas)) {
+      state.settings.gasUrl = gas;
+      store.saveSettings(state.settings);
+    }
+    if (params.has('gas')) {
+      params.delete('gas');
+      const rest = params.toString();
+      history.replaceState(null, '', location.pathname + (rest ? '?' + rest : ''));
+    }
+  } catch (e) { /* 取り込めなくても手入力で使える */ }
+}
+
 // 設定が足りないときは、何が足りないかを最初の画面で言う
 function checkSetup() {
   const box = $('setup-warning');
-  const missing = [];
-  if (!state.settings.keepaApiKey && !state.settings.preferProxy) missing.push('Keepa APIキー');
-  if (!state.settings.gasUrl) missing.push('GASのURL（出品規制の判定に必要）');
-  if (missing.length === 0) { box.hidden = true; return; }
-  box.hidden = false;
-  box.innerHTML = `未設定: ${missing.join(' / ')}。右上の⚙から入力してください。`;
+  if (!state.settings.gasUrl) {
+    box.hidden = false;
+    box.innerHTML = '右上の⚙で<b>GASのウェブアプリURL</b>を入れてください。'
+      + 'KeepaのAPIキーはそこから自動で取り込むので、入力はこの1つだけです。';
+    return;
+  }
+  if (!effectiveKeepaKey() && !state.settings.preferProxy) {
+    box.hidden = false;
+    box.innerHTML = 'KeepaのAPIキーをGASから取得できませんでした'
+      + (state.gasError ? `（${escapeHtml(state.gasError)}）` : '')
+      + '。仕入れSKUキャプチャの⚙でKeepaキーを保存するか、この画面の⚙で直接入力してください。';
+    return;
+  }
+  box.hidden = true;
 }
 
 function showView(name) {
@@ -175,7 +231,7 @@ async function lookup(query) {
 
   try {
     const { products } = await fetchProducts(query, {
-      apiKey: state.settings.keepaApiKey,
+      apiKey: effectiveKeepaKey(),
       gasUrl: state.settings.gasUrl,
       preferProxy: state.settings.preferProxy,
       offers: state.settings.fetchOffers,
@@ -523,10 +579,34 @@ function exportCsv() {
 
 /* ============================== 設定 ============================== */
 
+// Keepaキーがどこから来ているかを設定画面に出す。
+// 「入れたつもりで効いていない」を防ぐため、出どころを必ず明示する
+function updateKeepaKeyStatus() {
+  const el = $('keepa-key-status');
+  if (!el) return;
+  const tail = (k) => '…' + String(k).slice(-4);
+  if (state.settings.keepaApiKey) {
+    el.className = 'key-status is-ok';
+    el.textContent = `この端末に直接入力したキーを使っています（${tail(state.settings.keepaApiKey)}）`;
+  } else if (state.settings.syncedKeepaKey) {
+    el.className = 'key-status is-ok';
+    el.textContent = `GASから自動取得済み（${tail(state.settings.syncedKeepaKey)}）。入力は不要です。`;
+  } else if (!state.settings.gasUrl) {
+    el.className = 'key-status';
+    el.textContent = '上のGASのURLを入れると自動で取り込みます。';
+  } else {
+    el.className = 'key-status is-warn';
+    el.textContent = 'GASから取得できませんでした'
+      + (state.gasError ? `（${state.gasError}）` : '')
+      + '。仕入れSKUキャプチャの⚙でKeepaキーを保存すると共有されます。';
+  }
+}
+
 function fillSettingsForm() {
   const s = state.settings;
   $('set-keepa').value = s.keepaApiKey || '';
   $('set-gas').value = s.gasUrl || '';
+  updateKeepaKeyStatus();
   $('set-proxy').checked = !!s.preferProxy;
   $('set-offers').checked = !!s.fetchOffers;
   $('set-tax').checked = s.includeReferralTax !== false;
@@ -558,6 +638,8 @@ function bindSettingsView() {
     store.saveSettings(state.settings);
     $('settings-saved').hidden = false;
     checkSetup();
+    // GASのURLを入れ直したら、その場でKeepaキーを取りに行く
+    syncFromGas().then(fillSettingsForm);
   });
 }
 

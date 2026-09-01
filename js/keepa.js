@@ -221,6 +221,26 @@ export async function fetchProducts(query, opts) {
 }
 
 /**
+ * GASの共有設定を取ってくる。
+ * ここに仕入れSKUキャプチャが同期したKeepaのAPIキーが入っているので、
+ * スキャナ側で改めてキーを入力しなくて済む（入力はGASのURLだけ）。
+ */
+export async function fetchSharedConfig(gasUrl) {
+  if (!gasUrl) throw new Error('GASのURLが未設定です');
+  const url = gasUrl + (gasUrl.includes('?') ? '&' : '?')
+    + new URLSearchParams({ action: 'config' });
+  const res = await fetch(url, { mode: 'cors' });
+  if (!res.ok) throw new Error('GAS HTTP ' + res.status);
+  const body = await res.json();
+  if (!body.ok || !body.config) throw new Error(body.error || 'GASが設定を返しませんでした');
+  return {
+    keepaKey: String(body.config.keepaKey || ''),
+    sheetUrl: body.sheetUrl || '',
+    gasVersion: body.codeVersion || body.gasVersion || '',
+  };
+}
+
+/**
  * 出品規制をGAS(SP-API)に問い合わせる。
  * GAS未設定なら「未確認」を返し、画面側でセラセンへのリンクを出す
  */
