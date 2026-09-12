@@ -8,7 +8,7 @@ import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normal
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -282,15 +282,27 @@ async function lookupByName(code) {
   }
 
   try {
-    $('loading-text').textContent = `「${found.term}」でKeepaを検索中…`;
-    const { products } = await fetchProducts({ term: found.term }, keepaOpts());
+    // AmazonカタログがASINを返したときは推測ではないので、候補に並べず直行する
+    const byAsin = !!found.asin;
+    $('loading-text').textContent = byAsin
+      ? `${found.asin} をKeepaで確認中…`
+      : `「${found.term}」でKeepaを検索中…`;
+    const { products } = await fetchProducts(
+      byAsin ? { asin: found.asin } : { term: found.term }, keepaOpts());
     $('loading').hidden = true;
     if (products.length === 0) {
-      showError(`JAN ${code} はKeepaに登録がありません。`
-        + `${found.source}で調べた商品名「${found.name || found.term}」でも見つかりませんでした。`);
+      showError(byAsin
+        ? `JAN ${code} は${found.source}で ${found.asin} と分かりましたが、`
+          + 'Keepaにその商品のデータがありませんでした。'
+        : `JAN ${code} はKeepaに登録がありません。`
+          + `${found.source}で調べた商品名「${found.name || found.term}」でも見つかりませんでした。`);
       return;
     }
     state.foundBy = found;
+    if (byAsin) {
+      await showProduct(products[0]);
+      return;
+    }
     // 商品名検索は最大40件返る。棚の前で見比べられる数に絞る
     showCandidates(products.slice(0, 12), found);
   } catch (e) {
@@ -340,9 +352,16 @@ async function showProduct(product) {
   // 商品名から辿り着いた商品は、スキャンしたJANの商品とは限らない。
   // 結果画面でも出どころを出し続ける（候補画面の断り書きは隠れてしまうため）
   const found = state.foundBy;
-  $('fallback-note').hidden = !found;
-  if (found) {
-    $('fallback-note').textContent = `JAN ${state.jan} ではKeepaに見つからず、`
+  const note = $('fallback-note');
+  note.hidden = !found;
+  if (found && found.exact) {
+    // AmazonカタログのJAN→ASINは推測ではないので、警告ではなく事実として出す
+    note.className = 'notice notice-ok';
+    note.textContent = `JAN ${state.jan} はKeepaに登録がありませんでしたが、`
+      + `${found.source}でこのASINと判明しました。`;
+  } else if (found) {
+    note.className = 'notice notice-warn';
+    note.textContent = `JAN ${state.jan} ではKeepaに見つからず、`
       + `${found.source}で調べた商品名「${found.term}」から探した商品です。`
       + '現物とJANが一致しているか確かめてください。';
   }

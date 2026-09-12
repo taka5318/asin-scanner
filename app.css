@@ -158,6 +158,8 @@ main {
 
 .notice { border-radius: var(--radius); padding: 12px 14px; font-size: 14px; }
 .notice-warn { background: var(--warning-wash); border: 1px solid var(--warning); }
+/* 確定情報の断り書き（Amazonカタログで一致したとき）。警告ではないので緑側 */
+.notice-ok { background: var(--good-wash); border: 1px solid var(--good); }
 .notice-error { background: var(--critical-wash); border: 1px solid var(--critical); }
 
 .section-head {
