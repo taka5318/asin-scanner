@@ -82,10 +82,13 @@
 
     <div id="error-box" class="notice notice-error" hidden></div>
 
+    <!-- JANがKeepaに無くて、商品名から探し直したときの断り書き -->
+    <div id="fallback-note" class="notice notice-warn" hidden></div>
+
     <!-- JANが複数ASINに当たったときの候補選択 -->
     <div id="candidates" class="card" hidden>
-      <h2>候補が複数あります</h2>
-      <p class="hint">このJANに複数のASINが紐づいています。出品するものを選んでください。</p>
+      <h2 id="candidates-title">候補が複数あります</h2>
+      <p class="hint" id="candidates-hint">このJANに複数のASINが紐づいています。出品するものを選んでください。</p>
       <ul class="candidate-list" id="candidate-list"></ul>
     </div>
 

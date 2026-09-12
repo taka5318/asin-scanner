@@ -1,14 +1,14 @@
 // =====================================================================
 //  ASINスキャナ — 画面まわりの制御
 // =====================================================================
-import { fetchProducts, fetchRestriction, fetchSharedConfig, sliceSince } from './keepa.js';
+import { fetchJanName, fetchProducts, fetchRestriction, fetchSharedConfig, sliceSince } from './keepa.js';
 import { calcProfit, judge, judgeLabel } from './profit.js';
 import { TimeChart } from './chart.js';
 import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normalizeCode, unlockFeedbackAudio } from './scanner.js';
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.2.0';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -219,29 +219,35 @@ async function toggleTorch() {
 
 /* ============================ 取得と表示 ============================ */
 
+function keepaOpts() {
+  return {
+    apiKey: effectiveKeepaKey(),
+    gasUrl: state.settings.gasUrl,
+    preferProxy: state.settings.preferProxy,
+    offers: state.settings.fetchOffers,
+  };
+}
+
 async function lookup(query) {
   showView('result');
   $('error-box').hidden = true;
+  $('fallback-note').hidden = true;
   $('candidates').hidden = true;
   $('result').hidden = true;
   $('loading').hidden = false;
   $('loading-text').textContent = 'Keepaに問い合わせ中…';
 
   state.jan = query.code || '';
+  state.foundBy = null;
 
   try {
-    const { products } = await fetchProducts(query, {
-      apiKey: effectiveKeepaKey(),
-      gasUrl: state.settings.gasUrl,
-      preferProxy: state.settings.preferProxy,
-      offers: state.settings.fetchOffers,
-    });
+    const { products } = await fetchProducts(query, keepaOpts());
 
     if (products.length === 0) {
+      // JANがKeepaに無い商品は珍しくないので、商品名から探し直す
+      if (query.code) return await lookupByName(query.code);
       $('loading').hidden = true;
-      showError(query.code
-        ? `JAN ${query.code} に該当する商品がKeepaに見つかりませんでした。`
-        : `${query.asin} の情報を取得できませんでした。`);
+      showError(`${query.asin} の情報を取得できませんでした。`);
       return;
     }
     if (products.length > 1) {
@@ -256,7 +262,54 @@ async function lookup(query) {
   }
 }
 
-function showCandidates(products) {
+/**
+ * JANがKeepaに登録されていないときの回り道。
+ *   JAN →（GAS経由で Yahoo!/楽天/Google/AI から）商品名 → その名前でKeepaを検索
+ *
+ * 名前で引いた結果は「JANが一致している保証が無い」ので、1件しか出なくても
+ * 黙って確定させず、必ず断り書き付きの候補として人に選ばせる。
+ */
+async function lookupByName(code) {
+  let found;
+  try {
+    $('loading-text').textContent = 'Keepaに無い商品。商品名を調べています…';
+    found = await fetchJanName(code, state.settings.gasUrl);
+  } catch (e) {
+    $('loading').hidden = true;
+    showError(`JAN ${code} はKeepaに登録がありませんでした。`
+      + `商品名からの検索もできません（${String(e.message || e)}）`);
+    return;
+  }
+
+  try {
+    $('loading-text').textContent = `「${found.term}」でKeepaを検索中…`;
+    const { products } = await fetchProducts({ term: found.term }, keepaOpts());
+    $('loading').hidden = true;
+    if (products.length === 0) {
+      showError(`JAN ${code} はKeepaに登録がありません。`
+        + `${found.source}で調べた商品名「${found.name || found.term}」でも見つかりませんでした。`);
+      return;
+    }
+    state.foundBy = found;
+    // 商品名検索は最大40件返る。棚の前で見比べられる数に絞る
+    showCandidates(products.slice(0, 12), found);
+  } catch (e) {
+    $('loading').hidden = true;
+    showError(String(e.message || e));
+  }
+}
+
+function showCandidates(products, found) {
+  if (found) {
+    $('candidates-title').textContent = '商品名から探した候補';
+    $('candidates-hint').textContent = `JAN ${state.jan} はKeepaに登録がありませんでした。`
+      + `${found.source}で調べた「${found.name || found.term}」を`
+      + `「${found.term}」として検索した結果です。`
+      + 'JANが一致する保証はないので、現物と見比べてから選んでください。';
+  } else {
+    $('candidates-title').textContent = '候補が複数あります';
+    $('candidates-hint').textContent = 'このJANに複数のASINが紐づいています。出品するものを選んでください。';
+  }
   const ul = $('candidate-list');
   ul.innerHTML = '';
   for (const p of products) {
@@ -283,6 +336,16 @@ async function showProduct(product) {
   state.product = product;
   $('loading').hidden = false;
   $('loading-text').textContent = '出品規制を確認中…';
+
+  // 商品名から辿り着いた商品は、スキャンしたJANの商品とは限らない。
+  // 結果画面でも出どころを出し続ける（候補画面の断り書きは隠れてしまうため）
+  const found = state.foundBy;
+  $('fallback-note').hidden = !found;
+  if (found) {
+    $('fallback-note').textContent = `JAN ${state.jan} ではKeepaに見つからず、`
+      + `${found.source}で調べた商品名「${found.term}」から探した商品です。`
+      + '現物とJANが一致しているか確かめてください。';
+  }
 
   // 規制の問い合わせが遅くても、商品の中身は先に描いて待たせない。
   // ただしcanvasは「表示されてから」でないと幅が0のまま描かれるので、

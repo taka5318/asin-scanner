@@ -162,7 +162,9 @@ function firstNumber(list) {
 
 /**
  * Keepaから商品を引く。
- *   query: {code: JAN} または {asin: ASIN}
+ *   query: {code: JAN} / {asin: ASIN} / {term: 商品名}
+ * term は「JANがKeepaに登録されていない商品」を商品名から拾うための経路で、
+ * 商品検索(/search)に切り替わる。他は商品取得(/product)。
  * まずブラウザから直接叩き、CORS等で失敗したらGAS経由に切り替える。
  * （Keepa APIキーをGAS側に置いておけば、スマホにキーを持たせずに済む）
  */
@@ -172,18 +174,24 @@ export async function fetchProducts(query, opts) {
     domain: String(KEEPA_DOMAIN_JP),
     stats: '180',
     history: '1',
-    buybox: '1',
-    rating: '1',
   };
-  if (offers) params.offers = '20';
-  if (query.code) params.code = query.code;
-  if (query.asin) params.asin = query.asin;
+  if (query.term) {
+    params.type = 'product';
+    params.term = query.term;
+  } else {
+    params.buybox = '1';
+    params.rating = '1';
+    if (offers) params.offers = '20';
+    if (query.code) params.code = query.code;
+    if (query.asin) params.asin = query.asin;
+  }
 
+  const endpoint = query.term ? 'search' : 'product';
   const errors = [];
 
   const tryDirect = async () => {
     if (!apiKey) throw new Error('Keepa APIキーが未設定です');
-    const url = 'https://api.keepa.com/product?' + new URLSearchParams({ key: apiKey, ...params });
+    const url = `https://api.keepa.com/${endpoint}?` + new URLSearchParams({ key: apiKey, ...params });
     const res = await fetch(url, { mode: 'cors' });
     if (!res.ok) throw new Error('Keepa HTTP ' + res.status);
     return res.json();
@@ -238,6 +246,23 @@ export async function fetchSharedConfig(gasUrl) {
     sheetUrl: body.sheetUrl || '',
     gasVersion: body.codeVersion || body.gasVersion || '',
   };
+}
+
+/**
+ * JANがKeepaに無かったときに、商品名をGAS経由で調べる。
+ * GAS側がYahoo!ショッピング / 楽天 / Googleカスタム検索 / Claudeの順に当たり、
+ * 「Keepaの商品検索に通る短い語」(term) まで作って返してくれる。
+ * 戻り値 {ok, name, term, source, candidates, available, error}
+ */
+export async function fetchJanName(code, gasUrl) {
+  if (!gasUrl) throw new Error('GASのURLが未設定のため、商品名を調べられません');
+  const url = gasUrl + (gasUrl.includes('?') ? '&' : '?')
+    + new URLSearchParams({ action: 'janname', code });
+  const res = await fetch(url, { mode: 'cors' });
+  if (!res.ok) throw new Error('GAS HTTP ' + res.status);
+  const body = await res.json();
+  if (!body.ok) throw new Error(body.error || '商品名を調べられませんでした');
+  return body;
 }
 
 /**
