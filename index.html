@@ -189,6 +189,18 @@
           </div>
         </div>
 
+        <!-- Keepa公式のグラフ画像。APIキーの要らない公開URLなのでトークンを使わない。
+             読めなかったときは onerror で丸ごと隠すので、壊れた画像は出ない
+             （下の自前グラフだけが残る） -->
+        <figure class="chart-figure keepa-shot" id="keepa-graph-box" hidden>
+          <figcaption>Keepaのグラフ<span class="cap-note">（keepa.comと同じ見た目）</span></figcaption>
+          <a id="keepa-graph-link" href="#" target="_blank" rel="noopener noreferrer">
+            <!-- loading="lazy" を付けないこと。読めるまで枠を hidden にしている都合上、
+                 遅延読み込みだと「非表示だから読まない → 読めないから表示されない」で止まる -->
+            <img id="keepa-graph" alt="Keepaの価格推移グラフ" decoding="async">
+          </a>
+        </figure>
+
         <figure class="chart-figure">
           <figcaption>価格</figcaption>
           <div class="legend" id="legend-price"></div>

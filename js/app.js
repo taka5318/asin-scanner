@@ -8,7 +8,7 @@ import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normal
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.4.0';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -512,9 +512,34 @@ function seriesColor(n) {
   return getComputedStyle(document.documentElement).getPropertyValue('--series-' + n).trim();
 }
 
+/**
+ * Keepa公式のグラフ画像を出す。
+ * キー不要の公開URL（graph.keepa.com）なのでAPIトークンを消費せず、
+ * GAS経由設定(preferProxy)でも同じように出る。
+ * 落ちてきたら表示、駄目なら隠す。自前グラフが下にあるので消えても困らない。
+ */
+function renderKeepaGraph(p) {
+  const box = $('keepa-graph-box');
+  const img = $('keepa-graph');
+  $('keepa-graph-link').href = 'https://keepa.com/#!product/5-' + encodeURIComponent(p.asin);
+  box.hidden = true;
+  img.onload = () => { box.hidden = false; };
+  img.onerror = () => { box.hidden = true; };
+  img.src = 'https://graph.keepa.com/pricehistory.png?'
+    + new URLSearchParams({
+      asin: p.asin,
+      domain: 'co.jp',
+      range: String(state.rangeDays || 90),
+      salesrank: '1',
+      width: '600',
+      height: '250',
+    });
+}
+
 function drawCharts() {
   const p = state.product;
   if (!p) return;
+  renderKeepaGraph(p);
   const since = state.rangeDays ? Date.now() - state.rangeDays * 86400000 : 0;
   const cut = (s) => sliceSince(s, since);
 

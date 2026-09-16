@@ -157,6 +157,11 @@ main {
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .notice { border-radius: var(--radius); padding: 12px 14px; font-size: 14px; }
+/* Keepa公式グラフ。画像なので幅に合わせて縮め、暗所でも白飛びしないよう少し落とす */
+.keepa-shot a { display: block; }
+.keepa-shot img { width: 100%; height: auto; border-radius: 6px; background: #fff; }
+@media (prefers-color-scheme: dark) { .keepa-shot img { filter: brightness(0.88); } }
+
 .notice-warn { background: var(--warning-wash); border: 1px solid var(--warning); }
 /* 確定情報の断り書き（Amazonカタログで一致したとき）。警告ではないので緑側 */
 .notice-ok { background: var(--good-wash); border: 1px solid var(--good); }
