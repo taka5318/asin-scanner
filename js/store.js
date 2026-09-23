@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS = {
   // 仕入れSKUキャプチャが全端末で同期しているものを流用するので、
   // 社長が入力するのは gasUrl だけで済む
   syncedKeepaKey: '',
-  gasUrl: '',
+  gasUrl: 'https://script.google.com/macros/s/AKfycbzSQz0hDy0OueXfsR1w_kXmPTn7YmxdGe3li-8y76pg7mEppo8CX0o7TvFxlaqa6ixs/exec',
   preferProxy: false,       // trueならKeepaをGAS経由で引く（キーを端末に置きたくないとき）
   fetchOffers: false,       // 出品者一覧まで取る（Keepaのトークンを多く消費する）
   includeReferralTax: true, // 紹介料に消費税10%を足す
@@ -31,7 +31,9 @@ export const DEFAULT_SETTINGS = {
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return { ...DEFAULT_SETTINGS, ...(raw ? JSON.parse(raw) : {}) };
+    const settings = { ...DEFAULT_SETTINGS, ...(raw ? JSON.parse(raw) : {}) };
+    if (!settings.gasUrl) settings.gasUrl = DEFAULT_SETTINGS.gasUrl;
+    return settings;
   } catch (e) {
     return { ...DEFAULT_SETTINGS };
   }

@@ -8,7 +8,7 @@ import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normal
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.4.1';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -44,7 +44,15 @@ function init() {
   syncFromGas();
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* オフライン化は無くても動く */ });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+      // Androidのホーム画面版も起動時に更新を確認し、新版をすぐ有効化する。
+      reg.update().catch(() => {});
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (sessionStorage.getItem('asinScannerReloaded') === APP_VERSION) return;
+        sessionStorage.setItem('asinScannerReloaded', APP_VERSION);
+        location.reload();
+      });
+    }).catch(() => { /* オフライン化は無くても動く */ });
   }
 }
 
@@ -391,6 +399,9 @@ function renderProduct(p) {
   $('link-amazon').href = 'https://www.amazon.co.jp/dp/' + p.asin;
   $('link-keepa').href = 'https://keepa.com/#!product/5-' + p.asin;
   $('link-seller').href = 'https://sellercentral.amazon.co.jp/productsearch?q=' + p.asin;
+  const pritarHash = 'fba_autoasin=' + encodeURIComponent(p.asin)
+    + (p.title ? '&fba_autoname=' + encodeURIComponent(p.title) : '');
+  $('link-pricetar').href = 'https://jp3.pricetar.com/seller/market/choice?fbaApply=1#' + pritarHash;
 
   // 入力欄の初期値。売価はカート価格→新品最安の順で拾う
   const price = p.current.buyBox ?? p.current.newPrice ?? 0;
