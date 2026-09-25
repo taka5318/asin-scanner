@@ -208,7 +208,10 @@ export async function fetchProducts(query, opts) {
     return body.data;
   };
 
-  const order = preferProxy ? [tryProxy, tryDirect] : [tryDirect, tryProxy];
+  // キーを手入力していない端末はGAS経由だけ。キーはGASの中にしか無いので、
+  // 直叩きを試みても「キー未設定」の失敗が理由欄に混ざって紛らわしいだけ
+  const order = !apiKey ? [tryProxy]
+    : preferProxy ? [tryProxy, tryDirect] : [tryDirect, tryProxy];
   let data = null;
   for (const fn of order) {
     try {
@@ -230,8 +233,9 @@ export async function fetchProducts(query, opts) {
 
 /**
  * GASの共有設定を取ってくる。
- * ここに仕入れSKUキャプチャが同期したKeepaのAPIキーが入っているので、
- * スキャナ側で改めてキーを入力しなくて済む（入力はGASのURLだけ）。
+ * KeepaのAPIキーそのものは受け取らない（GASも返さない）。Keepaは ?action=keepa
+ * の中継で引くので、端末が知る必要があるのは「GASにキーが登録済みか」だけ。
+ * 古い版のGASがキーを返してきても、ここで捨てて端末には残さない。
  */
 export async function fetchSharedConfig(gasUrl) {
   if (!gasUrl) throw new Error('GASのURLが未設定です');
@@ -241,8 +245,9 @@ export async function fetchSharedConfig(gasUrl) {
   if (!res.ok) throw new Error('GAS HTTP ' + res.status);
   const body = await res.json();
   if (!body.ok || !body.config) throw new Error(body.error || 'GASが設定を返しませんでした');
+  const c = body.config;
   return {
-    keepaKey: String(body.config.keepaKey || ''),
+    keepaKeySet: typeof c.keepaKeySet === 'boolean' ? c.keepaKeySet : (c.keepaKey ? true : null),
     sheetUrl: body.sheetUrl || '',
     gasVersion: body.codeVersion || body.gasVersion || '',
   };

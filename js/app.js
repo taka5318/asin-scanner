@@ -8,7 +8,7 @@ import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normal
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.4.1';
+export const APP_VERSION = '1.5.0';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -56,25 +56,24 @@ function init() {
   }
 }
 
-// 実際にKeepaへ使うキー。手入力があればそれを優先し、無ければGASから降りてきた方を使う
+// この端末で直接Keepaを叩くためのキー。手入力したときだけ存在する。
+// 空ならKeepaはGAS経由（?action=keepa）で引き、キーはGASの中から出ない
 function effectiveKeepaKey() {
-  return state.settings.keepaApiKey || state.settings.syncedKeepaKey || '';
+  return state.settings.keepaApiKey || '';
 }
 
 /**
- * GASの共有設定からKeepaのAPIキーを取ってくる。
- * 仕入れSKUキャプチャが全端末で同期しているキーをそのまま使うので、
- * スキャナ側で入力するのはGASのURLだけで済む（毎回キーを打たなくてよい）。
+ * GASに「Keepaキーが登録済みか」だけ訊く。キーそのものは受け取らない。
+ * 仕入れSKUキャプチャが保存したキーをGASが中継で使うので、
+ * スキャナ側で入力するのはGASのURLだけで済む。
  */
 async function syncFromGas() {
   if (!state.settings.gasUrl) return;
   try {
     const cfg = await fetchSharedConfig(state.settings.gasUrl);
-    if (cfg.keepaKey && cfg.keepaKey !== state.settings.syncedKeepaKey) {
-      state.settings.syncedKeepaKey = cfg.keepaKey;
-      store.saveSettings(state.settings);
-    }
+    state.gasHasKeepaKey = cfg.keepaKeySet;
     state.gasVersion = cfg.gasVersion;
+    state.gasError = '';
   } catch (e) {
     state.gasError = String(e.message || e);
   }
@@ -107,14 +106,14 @@ function checkSetup() {
   if (!state.settings.gasUrl) {
     box.hidden = false;
     box.innerHTML = '右上の⚙で<b>GASのウェブアプリURL</b>を入れてください。'
-      + 'KeepaのAPIキーはそこから自動で取り込むので、入力はこの1つだけです。';
+      + 'KeepaはGAS経由で引くので、入力はこの1つだけです。';
     return;
   }
-  if (!effectiveKeepaKey() && !state.settings.preferProxy) {
+  // 登録なしと分かったときだけ言う。まだ訊いていない(null)ときは黙る
+  if (!effectiveKeepaKey() && state.gasHasKeepaKey === false) {
     box.hidden = false;
-    box.innerHTML = 'KeepaのAPIキーをGASから取得できませんでした'
-      + (state.gasError ? `（${escapeHtml(state.gasError)}）` : '')
-      + '。仕入れSKUキャプチャの⚙でKeepaキーを保存するか、この画面の⚙で直接入力してください。';
+    box.innerHTML = 'GASにKeepaのAPIキーが登録されていません。'
+      + '仕入れSKUキャプチャの⚙でKeepaキーを保存すると、ここでも使えるようになります。';
     return;
   }
   box.hidden = true;
@@ -706,17 +705,18 @@ function updateKeepaKeyStatus() {
   if (state.settings.keepaApiKey) {
     el.className = 'key-status is-ok';
     el.textContent = `この端末に直接入力したキーを使っています（${tail(state.settings.keepaApiKey)}）`;
-  } else if (state.settings.syncedKeepaKey) {
-    el.className = 'key-status is-ok';
-    el.textContent = `GASから自動取得済み（${tail(state.settings.syncedKeepaKey)}）。入力は不要です。`;
   } else if (!state.settings.gasUrl) {
     el.className = 'key-status';
-    el.textContent = '上のGASのURLを入れると自動で取り込みます。';
-  } else {
+    el.textContent = '上のGASのURLを入れると、GAS経由でKeepaを引けるようになります。';
+  } else if (state.gasError) {
     el.className = 'key-status is-warn';
-    el.textContent = 'GASから取得できませんでした'
-      + (state.gasError ? `（${state.gasError}）` : '')
-      + '。仕入れSKUキャプチャの⚙でKeepaキーを保存すると共有されます。';
+    el.textContent = `GASに繋がりませんでした（${state.gasError}）。URLを確認してください。`;
+  } else if (state.gasHasKeepaKey === false) {
+    el.className = 'key-status is-warn';
+    el.textContent = 'GASにKeepaキーが未登録です。仕入れSKUキャプチャの⚙でKeepaキーを保存してください。';
+  } else {
+    el.className = 'key-status is-ok';
+    el.textContent = 'GAS経由でKeepaを引きます。キーはGASの中だけにあり、この端末には置きません。入力は不要です。';
   }
 }
 

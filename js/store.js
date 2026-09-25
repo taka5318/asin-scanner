@@ -1,8 +1,9 @@
 // =====================================================================
 //  設定とスキャン履歴の保存（端末内のlocalStorageのみ）
 //
-//  Keepa APIキーもGASのURLもこの端末から外に出ない。
-//  ページ自体は公開リポジトリで配信するが、鍵は一切埋め込まない方針。
+//  ページ自体は公開リポジトリで配信するので、鍵もGASのURLも一切埋め込まない。
+//  GASの /exec は認証なしで叩けるため、URLも「持っている人だけが使える鍵」として扱う
+//  （既定値に書くと公開サイトのソースから誰でも拾える）。
 // =====================================================================
 
 const SETTINGS_KEY = 'asinScanner.settings.v1';
@@ -10,14 +11,10 @@ const HISTORY_KEY = 'asinScanner.history.v1';
 const HISTORY_LIMIT = 300;
 
 export const DEFAULT_SETTINGS = {
-  // 手入力のKeepaキー。空でよい（ふつうはGASから降りてくる方を使う）
+  // 手入力のKeepaキー。空でよい（空ならKeepaはGAS経由で引き、キーは端末に置かない）
   keepaApiKey: '',
-  // GASの共有設定(SHOP_CONFIG.keepaKey)から自動で降りてきたキー。
-  // 仕入れSKUキャプチャが全端末で同期しているものを流用するので、
-  // 社長が入力するのは gasUrl だけで済む
-  syncedKeepaKey: '',
-  gasUrl: 'https://script.google.com/macros/s/AKfycbzSQz0hDy0OueXfsR1w_kXmPTn7YmxdGe3li-8y76pg7mEppo8CX0o7TvFxlaqa6ixs/exec',
-  preferProxy: false,       // trueならKeepaをGAS経由で引く（キーを端末に置きたくないとき）
+  gasUrl: '',
+  preferProxy: false,       // 手入力キーがあっても、KeepaをGAS経由で引きたいとき
   fetchOffers: false,       // 出品者一覧まで取る（Keepaのトークンを多く消費する）
   includeReferralTax: true, // 紹介料に消費税10%を足す
   defaultOtherCost: 0,      // 送料・梱包などの既定値
@@ -31,9 +28,14 @@ export const DEFAULT_SETTINGS = {
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    const settings = { ...DEFAULT_SETTINGS, ...(raw ? JSON.parse(raw) : {}) };
-    if (!settings.gasUrl) settings.gasUrl = DEFAULT_SETTINGS.gasUrl;
-    return settings;
+    const saved = raw ? JSON.parse(raw) : {};
+    // 以前の版はGASから降りてきたKeepaキーを syncedKeepaKey として端末に保存していた。
+    // 今はキーを端末に置かない方針なので、残っていたら消して保存し直す
+    if ('syncedKeepaKey' in saved) {
+      delete saved.syncedKeepaKey;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(saved));
+    }
+    return { ...DEFAULT_SETTINGS, ...saved };
   } catch (e) {
     return { ...DEFAULT_SETTINGS };
   }
