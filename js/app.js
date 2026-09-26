@@ -8,13 +8,26 @@ import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normal
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.5.1';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
 const $ = (id) => document.getElementById(id);
 const yen = (v) => (v === null || v === undefined || !Number.isFinite(v) ? '—' : '¥' + Math.round(v).toLocaleString('ja-JP'));
 const num = (v) => (v === null || v === undefined ? '—' : Number(v).toLocaleString('ja-JP'));
+const normalizeScannerText = (value) => String(value || '').normalize('NFKC').toUpperCase().replace(/[^A-Z0-9]/g, '');
+const isScannableCode = (value) => ASIN_RE.test(value) || (/^\d{8,14}$/.test(value) && isValidGtin(value));
+
+let readerBuffer = '';
+let readerLastKeyAt = 0;
+let readerTimer = null;
+
+function clearReaderBuffer() {
+  readerBuffer = '';
+  readerLastKeyAt = 0;
+  clearTimeout(readerTimer);
+  readerTimer = null;
+}
 
 const state = {
   settings: store.loadSettings(),
@@ -120,6 +133,7 @@ function checkSetup() {
 }
 
 function showView(name) {
+  clearReaderBuffer();
   for (const v of ['scan', 'result', 'settings']) {
     $('view-' + v).hidden = v !== name;
   }
@@ -129,6 +143,7 @@ function showView(name) {
 /* ============================ スキャン画面 ============================ */
 
 function bindScanView() {
+  bindKeyboardReader();
   $('btn-start-cam').addEventListener('click', startCamera);
   $('btn-stop-cam').addEventListener('click', stopCamera);
   $('btn-torch').addEventListener('click', toggleTorch);
@@ -149,11 +164,29 @@ function bindScanView() {
 
   $('form-manual').addEventListener('submit', (ev) => {
     ev.preventDefault();
-    const raw = $('input-code').value.trim();
+    const raw = normalizeScannerText($('input-code').value);
     if (!raw) return;
+    clearReaderBuffer();
     $('input-code').value = '';
     submitCode(raw);
   });
+
+  const input = $('input-code');
+  const normalizeInput = () => {
+    const before = input.value;
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const after = normalizeScannerText(before);
+    if (after === before) return;
+    input.value = after;
+    if (start !== null && end !== null) {
+      input.setSelectionRange(normalizeScannerText(before.slice(0, start)).length,
+        normalizeScannerText(before.slice(0, end)).length);
+    }
+  };
+  input.addEventListener('focus', clearReaderBuffer);
+  input.addEventListener('input', (ev) => { if (!ev.isComposing) normalizeInput(); });
+  input.addEventListener('compositionend', normalizeInput);
 
   $('btn-export').addEventListener('click', exportCsv);
   $('btn-clear-history').addEventListener('click', () => {
@@ -165,9 +198,52 @@ function bindScanView() {
   $('btn-settings').addEventListener('click', () => { fillSettingsForm(); showView('settings'); });
 }
 
+// USB/BluetoothのHIDバーコードリーダーはキー入力として届く。
+// 入力欄を選ばずに読めるよう、編集欄以外で届いた連続キーを表示・検索する。
+function bindKeyboardReader() {
+  document.addEventListener('keydown', (ev) => {
+    if (!$('view-settings').hidden || ev.ctrlKey || ev.altKey || ev.metaKey || ev.repeat) return;
+    const target = ev.target;
+    if (target instanceof Element && (target.closest('input, textarea, select, [contenteditable]'))) return;
+    if ($('view-scan').hidden && $('view-result').hidden) return;
+
+    if (ev.key === 'Enter' || ev.key === 'Tab') {
+      if (!readerBuffer) return;
+      ev.preventDefault();
+      const code = readerBuffer;
+      clearReaderBuffer();
+      $('input-code').value = '';
+      submitCode(code);
+      return;
+    }
+
+    let char = normalizeScannerText(ev.key);
+    if (char.length !== 1) {
+      const code = ev.code || '';
+      if (/^Key[A-Z]$/.test(code)) char = code.slice(3);
+      else if (/^(Digit|Numpad)[0-9]$/.test(code)) char = code.slice(-1);
+    }
+    if (!/^[A-Z0-9]$/.test(char)) return;
+    ev.preventDefault();
+    const now = performance.now();
+    if (now - readerLastKeyAt > 1000 || readerBuffer.length >= 32) readerBuffer = '';
+    readerBuffer += char;
+    readerLastKeyAt = now;
+    $('input-code').value = readerBuffer;
+    clearTimeout(readerTimer);
+    readerTimer = setTimeout(() => {
+      const code = readerBuffer;
+      if (!isScannableCode(code)) return;
+      clearReaderBuffer();
+      $('input-code').value = '';
+      submitCode(code);
+    }, 450);
+  }, true);
+}
+
 // 入力された文字列がASINかJANかを見分けて調べに行く
 function submitCode(raw) {
-  const value = raw.replace(/\s/g, '');
+  const value = normalizeScannerText(raw);
   if (ASIN_RE.test(value)) return lookup({ asin: value.toUpperCase() });
   const code = normalizeCode(value);
   if (/^\d{8,14}$/.test(code)) {

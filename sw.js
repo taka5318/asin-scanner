@@ -1,7 +1,7 @@
 // アプリの見た目部分だけを端末に持たせる。
 // 店舗の電波が弱くても画面はすぐ開き、通信はKeepa/GASの問い合わせだけで済む。
 // APP_VERSION を上げると下のキャッシュ名も変わり、古い版が自動で捨てられる。
-const CACHE = 'asin-scanner-v1.5.0';
+const CACHE = 'asin-scanner-v1.5.1';
 
 const SHELL = [
   './',
