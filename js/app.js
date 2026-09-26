@@ -8,7 +8,7 @@ import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normal
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.5.1';
+export const APP_VERSION = '1.5.2';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -58,12 +58,17 @@ function init() {
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
-      // Androidのホーム画面版も起動時に更新を確認し、新版をすぐ有効化する。
-      reg.update().catch(() => {});
+      // FirefoxでsessionStorageが使えなくても新版への切替時に再読み込みする。
+      let reloadedForController = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (sessionStorage.getItem('asinScannerReloaded') === APP_VERSION) return;
-        sessionStorage.setItem('asinScannerReloaded', APP_VERSION);
+        if (reloadedForController) return;
+        reloadedForController = true;
         location.reload();
+      });
+      const checkForUpdates = () => reg.update().catch(() => {});
+      checkForUpdates();
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) checkForUpdates();
       });
     }).catch(() => { /* オフライン化は無くても動く */ });
   }
