@@ -5,10 +5,11 @@ import { fetchJanName, fetchProducts, fetchRestriction, fetchSharedConfig, slice
 import { calcProfit, judge, judgeLabel } from './profit.js';
 import { TimeChart } from './chart.js';
 import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normalizeCode, unlockFeedbackAudio } from './scanner.js';
+import { extractModelNumber, matchesModel, variationEntries } from './model.js';
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.5.2';
+export const APP_VERSION = '1.6.0';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -38,6 +39,7 @@ const state = {
   charts: {},
   scanner: null,
   cameraWasOn: false,
+  explorerRequest: 0,
 };
 
 /* =============================== 起動 =============================== */
@@ -139,6 +141,7 @@ function checkSetup() {
 
 function showView(name) {
   clearReaderBuffer();
+  if (name !== 'result') state.explorerRequest++;
   for (const v of ['scan', 'result', 'settings']) {
     $('view-' + v).hidden = v !== name;
   }
@@ -318,6 +321,7 @@ function keepaOpts() {
 
 async function lookup(query) {
   showView('result');
+  state.explorerRequest++;
   $('error-box').hidden = true;
   $('fallback-note').hidden = true;
   $('candidates').hidden = true;
@@ -400,6 +404,10 @@ async function lookupByName(code) {
 }
 
 function showCandidates(products, found) {
+  state.explorerRequest++;
+  $('model-explorer').hidden = true;
+  $('model-graph-list').replaceChildren();
+  $('model-explorer').querySelectorAll('.btn-more').forEach((button) => button.remove());
   if (found) {
     $('candidates-title').textContent = '商品名から探した候補';
     $('candidates-hint').textContent = `JAN ${state.jan} はKeepaに登録がありませんでした。`
@@ -416,20 +424,194 @@ function showCandidates(products, found) {
     const li = document.createElement('li');
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.innerHTML = `${p.image ? `<img src="${p.image}" alt="">` : ''}
-      <span><strong>${escapeHtml(p.title || p.asin)}</strong><br>
-      <small class="mono">${p.asin}</small> ·
-      <small>${p.current.buyBox ? yen(p.current.buyBox) : '価格不明'} ·
-      30日${p.drops30 ?? '—'}回</small></span>`;
+    btn.className = 'candidate-select';
+    if (p.image) {
+      const img = document.createElement('img');
+      img.src = p.image;
+      img.alt = '';
+      btn.appendChild(img);
+    }
+    const content = document.createElement('span');
+    const title = document.createElement('strong');
+    title.textContent = p.title || p.asin;
+    const meta = document.createElement('small');
+    meta.textContent = `${p.asin} · ${p.current.buyBox ? yen(p.current.buyBox) : '価格不明'} · 30日${p.drops30 ?? '—'}回`;
+    content.append(title, document.createElement('br'), meta);
+    btn.appendChild(content);
     btn.addEventListener('click', () => {
+      state.explorerRequest++;
       $('candidates').hidden = true;
       $('loading').hidden = false;
       showProduct(p);
     });
     li.appendChild(btn);
+    const model = found ? extractModelNumber(p, found.name) : '';
+    const hasVariants = hasVariationsHint(p);
+    if (model || hasVariants) {
+      const actions = document.createElement('div');
+      actions.className = 'candidate-actions';
+      if (model) {
+        const modelBtn = document.createElement('button');
+        modelBtn.type = 'button';
+        modelBtn.className = 'pill model-search';
+        modelBtn.textContent = `型番 ${model} でKeepa再検索`;
+        modelBtn.addEventListener('click', () => searchByModel(model, p));
+        actions.appendChild(modelBtn);
+      }
+      if (hasVariants) {
+        actions.appendChild(variationButton(p));
+      }
+      li.appendChild(actions);
+    }
     ul.appendChild(li);
   }
   $('candidates').hidden = false;
+}
+
+function hasVariationsHint(product) {
+  return product.productType === 5
+    || variationEntries(product.raw && product.raw.variations).length > 1
+    || (ASIN_RE.test(product.parentAsin || '') && product.parentAsin !== product.asin);
+}
+
+function variationButton(product) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pill variant-graphs';
+  btn.textContent = 'バリエーション別グラフを見る';
+  btn.addEventListener('click', () => showVariations(product));
+  return btn;
+}
+
+function openExplorer(title, status) {
+  const panel = $('model-explorer');
+  panel.querySelectorAll('.btn-more').forEach((button) => button.remove());
+  $('model-explorer-title').textContent = title;
+  $('model-explorer-status').textContent = status;
+  $('model-graph-list').replaceChildren();
+  panel.hidden = false;
+  panel.scrollIntoView({ block: 'nearest' });
+  return $('model-graph-list');
+}
+
+function graphImageUrl(asin) {
+  return 'https://graph.keepa.com/pricehistory.png?' + new URLSearchParams({
+    asin, domain: 'co.jp', range: String(state.rangeDays || 90),
+    salesrank: '1', width: '600', height: '250',
+  });
+}
+
+function graphCard({ asin, title, subtitle, product }) {
+  const card = document.createElement('article');
+  card.className = 'model-graph-card';
+  const heading = document.createElement('h4');
+  heading.textContent = title || asin;
+  const meta = document.createElement('p');
+  meta.className = 'hint';
+  meta.textContent = [asin, subtitle].filter(Boolean).join(' · ');
+  const figure = document.createElement('figure');
+  figure.className = 'keepa-shot';
+  const link = document.createElement('a');
+  link.href = 'https://keepa.com/#!product/5-' + encodeURIComponent(asin);
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  const image = document.createElement('img');
+  image.src = graphImageUrl(asin);
+  image.alt = `${title || asin} のKeepa価格推移グラフ`;
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  const unavailable = document.createElement('span');
+  unavailable.className = 'hint';
+  unavailable.hidden = true;
+  unavailable.textContent = 'グラフ画像を表示できません。Keepaで開いて確認してください。';
+  image.onerror = () => { image.hidden = true; unavailable.hidden = false; };
+  link.append(image, unavailable);
+  figure.appendChild(link);
+  card.append(heading, meta, figure);
+  if (product) {
+    const detail = document.createElement('button');
+    detail.type = 'button';
+    detail.className = 'pill';
+    detail.textContent = 'この商品の詳細を見る';
+    detail.addEventListener('click', () => {
+      state.explorerRequest++;
+      $('candidates').hidden = true;
+      showProduct(product);
+    });
+    card.appendChild(detail);
+    if (hasVariationsHint(product)) card.appendChild(variationButton(product));
+  }
+  return card;
+}
+
+async function searchByModel(model, source) {
+  const request = ++state.explorerRequest;
+  const list = openExplorer(`型番 ${model} のKeepa検索`, '型番で再検索中…');
+  try {
+    const { products } = await fetchProducts({ term: model }, keepaOpts());
+    if (request !== state.explorerRequest) return;
+    const matched = products.filter((p) => matchesModel(p, model));
+    if (!matched.length) {
+      $('model-explorer-status').textContent = '型番が一致する検索結果はありませんでした。元の候補のグラフを表示します。JAN・型番との一致は未確認です。';
+      list.appendChild(graphCard({ asin: source.asin, title: source.title, product: source }));
+      return;
+    }
+    $('model-explorer-status').textContent = `${matched.length}件の型番一致候補です。JANが一致する保証はないため、サイズ・色も確認してください。`;
+    for (const p of matched) {
+      list.appendChild(graphCard({
+        asin: p.asin, title: p.title,
+        subtitle: [p.color, p.size].filter(Boolean).join(' / '), product: p,
+      }));
+    }
+  } catch (error) {
+    if (request !== state.explorerRequest) return;
+    $('model-explorer-status').textContent = `型番で再検索できませんでした（${String(error.message || error)}）。元の候補のグラフを表示します。`;
+    list.appendChild(graphCard({ asin: source.asin, title: source.title, product: source }));
+  }
+}
+
+async function showVariations(product) {
+  const request = ++state.explorerRequest;
+  let entries = variationEntries(product.raw && product.raw.variations);
+  const list = openExplorer('バリエーション別のKeepaグラフ', entries.length > 1
+    ? 'バリエーションを表示中…'
+    : '親ASINをKeepaで確認中…（追加トークンを使用します）');
+  try {
+    if (entries.length < 2) {
+      const parentAsin = ASIN_RE.test(product.parentAsin || '') ? product.parentAsin : product.asin;
+      // 明示的に一覧を開いた時だけlive offersを使い、親の最新バリエーションを取得する。
+      const response = await fetchProducts({ asin: parentAsin }, { ...keepaOpts(), offers: true });
+      if (request !== state.explorerRequest) return;
+      const parent = response.products.find((p) => p.asin === parentAsin);
+      entries = variationEntries(parent && parent.raw.variations);
+    }
+    if (request !== state.explorerRequest) return;
+    if (entries.length < 2) {
+      $('model-explorer-status').textContent = 'Keepaからバリエーション一覧を取得できませんでした。元の商品のグラフを表示します。';
+      list.appendChild(graphCard({ asin: product.asin, title: product.title, product }));
+      return;
+    }
+    $('model-explorer-status').textContent = `${entries.length}件のバリエーションがあります。型番だけでなく、現物のサイズ・色・JANを確認してください。`;
+    let shown = 0;
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'btn btn-ghost btn-more';
+    const appendBatch = () => {
+      for (const entry of entries.slice(shown, shown + 20)) {
+        list.appendChild(graphCard({ asin: entry.asin, title: entry.label || 'バリエーション', subtitle: entry.label ? '' : product.title }));
+      }
+      shown = Math.min(shown + 20, entries.length);
+      more.textContent = `さらに表示（${shown}/${entries.length}件）`;
+      more.hidden = shown >= entries.length;
+    };
+    more.addEventListener('click', appendBatch);
+    appendBatch();
+    list.after(more);
+  } catch (error) {
+    if (request !== state.explorerRequest) return;
+    $('model-explorer-status').textContent = `バリエーションを取得できませんでした（${String(error.message || error)}）。元の商品のグラフを表示します。`;
+    list.appendChild(graphCard({ asin: product.asin, title: product.title, product }));
+  }
 }
 
 async function showProduct(product) {
@@ -616,15 +798,7 @@ function renderKeepaGraph(p) {
   box.hidden = true;
   img.onload = () => { box.hidden = false; };
   img.onerror = () => { box.hidden = true; };
-  img.src = 'https://graph.keepa.com/pricehistory.png?'
-    + new URLSearchParams({
-      asin: p.asin,
-      domain: 'co.jp',
-      range: String(state.rangeDays || 90),
-      salesrank: '1',
-      width: '600',
-      height: '250',
-    });
+  img.src = graphImageUrl(p.asin);
 }
 
 function drawCharts() {

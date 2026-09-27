@@ -391,12 +391,22 @@ canvas { width: 100%; display: block; touch-action: pan-y; }
 
 /* ---------- 候補・読み込み ---------- */
 .candidate-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.candidate-list button {
+.candidate-list .candidate-select {
   width: 100%; display: flex; gap: 10px; align-items: center; text-align: left;
   background: var(--plane); border: 1px solid var(--border); border-radius: 10px;
   padding: 9px 10px; font: inherit; color: inherit; cursor: pointer;
 }
 .candidate-list img { width: 44px; height: 44px; object-fit: contain; background: #fff; border-radius: 6px; flex: none; }
+.candidate-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.candidate-actions .pill { color: var(--series-1); border-color: var(--series-1); }
+.model-explorer { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); scroll-margin-top: 64px; }
+.model-explorer h3 { font-size: 15px; margin: 0; }
+.model-graph-card { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.model-graph-card h4 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.model-graph-card .hint { margin: 2px 0 8px; }
+.model-graph-card .keepa-shot { margin: 8px 0; }
+.model-graph-card .pill { margin: 4px 6px 2px 0; color: var(--series-1); }
+.model-explorer .btn-more { margin-top: 12px; }
 
 .loading { display: flex; align-items: center; gap: 10px; padding: 16px; color: var(--text-secondary); }
 .spinner {

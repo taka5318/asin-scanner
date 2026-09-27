@@ -1,5 +1,6 @@
 {
   "name": "ASINスキャナ｜FC物販",
+  "version": "1.6.0",
   "short_name": "ASINスキャナ",
   "description": "バーコードを読んで、Amazonで売れているか・利益が取れるかをその場で判断する",
   "start_url": "./",

@@ -110,6 +110,12 @@ export function normalizeProduct(p) {
   return {
     asin: p.asin || '',
     title: p.title || '',
+    model: p.model || '',
+    partNumber: p.partNumber || '',
+    parentAsin: p.parentAsin || '',
+    color: p.color || '',
+    size: p.size || '',
+    productType: p.productType ?? null,
     brand: p.brand || p.manufacturer || '',
     image: images[0] ? 'https://images-na.ssl-images-amazon.com/images/I/' + images[0] : '',
     category: categoryTree.length ? categoryTree[categoryTree.length - 1] : '',

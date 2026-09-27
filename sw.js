@@ -1,5 +1,5 @@
 // オフライン用に画面を保存する。オンライン時は古い画面を返さず最新版を優先する。
-const CACHE = 'asin-scanner-v1.5.2';
+const CACHE = 'asin-scanner-v1.6.0';
 
 const SHELL = [
   './',
@@ -8,6 +8,7 @@ const SHELL = [
   './manifest.webmanifest',
   './js/app.js',
   './js/keepa.js',
+  './js/model.js',
   './js/profit.js',
   './js/chart.js',
   './js/scanner.js',
