@@ -130,6 +130,23 @@
         <div class="stats" id="stats"></div>
       </div>
 
+      <div class="card kaitori-card" id="kaitori-box" hidden>
+        <div class="section-head">
+          <h2>買取スキャナー</h2>
+          <span class="mono kaitori-jan" id="kaitori-jan"></span>
+        </div>
+        <p class="kaitori-best" id="kaitori-note">買取価格を確認中…</p>
+        <figure class="chart-figure" id="kaitori-chart-box" hidden>
+          <div class="legend" id="legend-kaitori"></div>
+          <div class="chart-wrap">
+            <canvas id="chart-kaitori" height="170"></canvas>
+            <div class="tooltip" id="tip-kaitori" hidden></div>
+          </div>
+        </figure>
+        <p class="hint" id="kaitori-history-note"></p>
+        <p class="hint">カイトリスキャナーの最新値と、GASの「買取履歴」に保存した日次データです。</p>
+      </div>
+
       <div class="card">
         <h2>手数料と手残り</h2>
         <div class="inputs">

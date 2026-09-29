@@ -1,7 +1,7 @@
 // =====================================================================
 //  ASINスキャナ — 画面まわりの制御
 // =====================================================================
-import { fetchJanName, fetchProducts, fetchRestriction, fetchSharedConfig, sliceSince } from './keepa.js';
+import { fetchJanName, fetchProducts, fetchRestriction, fetchSharedConfig, fetchKaitoriHistory, sliceSince } from './keepa.js';
 import { calcProfit, judge, judgeLabel } from './profit.js';
 import { TimeChart } from './chart.js';
 import { BarcodeScanner, decodeImageFile, isCameraAvailable, isValidGtin, normalizeCode, unlockFeedbackAudio } from './scanner.js';
@@ -9,7 +9,7 @@ import { extractModelNumber, matchesModel, variationEntries } from './model.js';
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.6.1';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -40,6 +40,8 @@ const state = {
   scanner: null,
   cameraWasOn: false,
   explorerRequest: 0,
+  kaitori: null,
+  kaitoriRequest: 0,
 };
 
 /* =============================== 起動 =============================== */
@@ -642,6 +644,7 @@ async function showProduct(product) {
   $('loading').hidden = true;
   $('result').hidden = false;
   renderProduct(product);
+  loadKaitoriHistory(state.jan);
 
   state.restriction = { status: '?', code: 'PENDING', message: '確認中' };
   renderProfitAndVerdict();
@@ -681,6 +684,67 @@ function renderProduct(p) {
 
   renderStats(p);
   setRange(state.rangeDays);
+}
+
+async function loadKaitoriHistory(jan) {
+  const request = ++state.kaitoriRequest;
+  state.kaitori = null;
+
+  const box = $('kaitori-box');
+  const validJan = /^\d{8}$|^\d{13}$/.test(String(jan || ''));
+  box.hidden = !validJan;
+  if (!validJan) return;
+
+  $('kaitori-jan').textContent = `JAN ${jan}`;
+  $('kaitori-note').textContent = '買取価格を確認中…';
+  $('kaitori-history-note').textContent = '';
+  $('kaitori-chart-box').hidden = true;
+  state.charts.kaitori.setSeries([]);
+
+  const result = await fetchKaitoriHistory(jan, state.settings.gasUrl);
+  if (request !== state.kaitoriRequest || state.jan !== jan) return;
+  state.kaitori = result;
+  renderKaitori(result);
+}
+
+function renderKaitori(result) {
+  const note = $('kaitori-note');
+  const historyNote = $('kaitori-history-note');
+  const chartBox = $('kaitori-chart-box');
+
+  if (!result) {
+    note.textContent = '買取価格を取得できませんでした。GASのURLと接続状態を確認してください。';
+    historyNote.textContent = '';
+    chartBox.hidden = true;
+    state.charts.kaitori.setSeries([]);
+    return;
+  }
+
+  const best = result.best;
+  note.textContent = best
+    ? `現在の買取最高 ${yen(Number(best.price))}${best.shop ? `（${best.shop}）` : ''}`
+    : '現在の買取価格は見つかりませんでした。';
+
+  const since = state.rangeDays ? Date.now() - state.rangeDays * 86400000 : 0;
+  const points = (result.points || [])
+    .filter((p) => Number.isFinite(Number(p.t)) && Number(p.v) > 0 && Number(p.t) >= since)
+    .map((p) => ({ t: Number(p.t), v: Number(p.v), shop: p.shop || '' }))
+    .sort((a, b) => a.t - b.t);
+
+  if (points.length < 2) {
+    chartBox.hidden = true;
+    historyNote.textContent = '価格推移は「買取履歴」が2日分以上たまると表示されます。';
+    state.charts.kaitori.setSeries([]);
+    return;
+  }
+
+  chartBox.hidden = false;
+  historyNote.textContent = `${points.length}日分の最高買取価格`;
+  const color = seriesColor(4);
+  state.charts.kaitori.setSeries([
+    { key: 'kaitori', label: '買取最高値', color, points },
+  ]);
+  $('legend-kaitori').innerHTML = `<span><i style="background:${color}"></i>買取最高値</span>`;
 }
 
 function renderStats(p) {
@@ -766,6 +830,11 @@ function buildCharts() {
   });
   state.charts.rank.setTooltipEl($('tip-rank'));
 
+  state.charts.kaitori = new TimeChart($('chart-kaitori'), {
+    format: (v) => '¥' + Math.round(v).toLocaleString('ja-JP'),
+  });
+  state.charts.kaitori.setTooltipEl($('tip-kaitori'));
+
   for (const btn of $('range-tabs').querySelectorAll('button')) {
     btn.addEventListener('click', () => setRange(Number(btn.dataset.days)));
   }
@@ -779,6 +848,7 @@ function setRange(days) {
     btn.setAttribute('aria-pressed', String(Number(btn.dataset.days) === days));
   }
   drawCharts();
+  if (state.kaitori) renderKaitori(state.kaitori);
 }
 
 function seriesColor(n) {
@@ -825,6 +895,8 @@ function drawCharts() {
   state.charts.rank.setSeries([
     { key: 'rank', label: 'ランキング', color: seriesColor(1), points: cut(p.series.rank) },
   ]);
+
+  if (state.kaitori) renderKaitori(state.kaitori);
 
   renderDataTable(p, since);
 }

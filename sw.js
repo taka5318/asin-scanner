@@ -1,5 +1,5 @@
 // オフライン用に画面を保存する。オンライン時は古い画面を返さず最新版を優先する。
-const CACHE = 'asin-scanner-v1.6.0';
+const CACHE = 'asin-scanner-v1.6.1';
 
 const SHELL = [
   './',

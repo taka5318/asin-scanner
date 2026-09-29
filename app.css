@@ -18,6 +18,7 @@
   --series-1: #2a78d6;   /* カート価格 */
   --series-2: #eb6834;   /* 新品最安 */
   --series-3: #1baf7a;   /* Amazon本体 */
+  --series-4: #7a4dcc;   /* 買取最高値 */
 
   --good: #0ca30c;
   --warning: #fab219;
@@ -46,6 +47,7 @@
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
+    --series-4: #a47bea;
 
     --good-wash: #122512;
     --warning-wash: #2a2310;
@@ -166,6 +168,9 @@ main {
 /* 確定情報の断り書き（Amazonカタログで一致したとき）。警告ではないので緑側 */
 .notice-ok { background: var(--good-wash); border: 1px solid var(--good); }
 .notice-error { background: var(--critical-wash); border: 1px solid var(--critical); }
+.kaitori-best { margin: 0 0 8px; font-size: 18px; font-weight: 750; color: var(--good); }
+.kaitori-jan { font-size: 11px; color: var(--text-muted); }
+.kaitori-card .chart-figure { margin-top: 12px; }
 
 .section-head {
   display: flex; align-items: center; justify-content: space-between;

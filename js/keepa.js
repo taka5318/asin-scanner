@@ -277,6 +277,25 @@ export async function fetchJanName(code, gasUrl) {
 }
 
 /**
+ * JANからカイトリスキャナーの現在最高値と、GASの「買取履歴」に
+ * 保存された日次推移を取得する。結果画面全体を止めないよう、通信失敗は null。
+ */
+export async function fetchKaitoriHistory(jan, gasUrl) {
+  if (!gasUrl || !jan) return null;
+  try {
+    const url = gasUrl + (gasUrl.includes('?') ? '&' : '?')
+      + new URLSearchParams({ action: 'kaitori', jan });
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error('GAS HTTP ' + res.status);
+    const body = await res.json();
+    if (!body.ok) throw new Error(body.error || '買取価格を取得できませんでした');
+    return body;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * 出品規制をGAS(SP-API)に問い合わせる。
  * GAS未設定なら「未確認」を返し、画面側でセラセンへのリンクを出す
  */
