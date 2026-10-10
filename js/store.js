@@ -91,8 +91,9 @@ export function historyToCsv(list) {
     x.ts ? new Date(x.ts).toLocaleString('ja-JP') : '',
     x.jan || '', x.asin || '', x.title || '',
     x.judgeLabel || '', x.restriction || '',
-    round(x.price), round(x.cost), round(x.profit),
-    x.marginPct === null || x.marginPct === undefined ? '' : x.marginPct.toFixed(1),
+    // 仕入値なしの粗利は手残りそのもの。古い履歴に残っていても粗利として書き出さない
+    round(x.price), round(x.cost), x.cost ? round(x.profit) : '',
+    !x.cost || x.marginPct === null || x.marginPct === undefined ? '' : x.marginPct.toFixed(1),
     x.drops30 ?? '', x.countNew ?? '',
   ]);
   const esc = (v) => {

@@ -9,7 +9,7 @@ import { extractModelNumber, matchesModel, variationEntries } from './model.js';
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.6.1';
+export const APP_VERSION = '1.6.2';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -42,7 +42,14 @@ const state = {
   explorerRequest: 0,
   kaitori: null,
   kaitoriRequest: 0,
+  // 遅れて返った前の商品の応答で、今の画面を上書きしないための番号。
+  // lookupRequest は検索ごと、productRequest は商品を表示するたびに進める
+  lookupRequest: 0,
+  productRequest: 0,
 };
+
+// 新しい版が届いたが、入力の途中なので読み直しを待っている
+let reloadWhenIdle = false;
 
 /* =============================== 起動 =============================== */
 
@@ -61,14 +68,15 @@ function init() {
   syncFromGas();
 
   if ('serviceWorker' in navigator) {
+    // 初めて入れたときの clients.claim() でも controllerchange が来る。
+    // 中身は今読んだものと同じなので、そこでは読み直さない
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) { hadController = true; return; }
+      reloadWhenIdle = true;
+      reloadIfIdle();
+    });
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
-      // FirefoxでsessionStorageが使えなくても新版への切替時に再読み込みする。
-      let reloadedForController = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloadedForController) return;
-        reloadedForController = true;
-        location.reload();
-      });
       const checkForUpdates = () => reg.update().catch(() => {});
       checkForUpdates();
       document.addEventListener('visibilitychange', () => {
@@ -143,11 +151,20 @@ function checkSetup() {
 
 function showView(name) {
   clearReaderBuffer();
+  // 画面を切り替えたら、待っている検索の応答はもう表示しない（入力ミスのエラー表示も含む）
+  state.lookupRequest++;
   if (name !== 'result') state.explorerRequest++;
   for (const v of ['scan', 'result', 'settings']) {
     $('view-' + v).hidden = v !== name;
   }
   window.scrollTo(0, 0);
+  reloadIfIdle();
+}
+
+// 新しい版への切り替えは、スキャン画面にいるときだけ。
+// 結果画面で入れかけた仕入値や、設定画面の入力を読み直しで消さない
+function reloadIfIdle() {
+  if (reloadWhenIdle && !$('view-scan').hidden) location.reload();
 }
 
 /* ============================ スキャン画面 ============================ */
@@ -219,6 +236,13 @@ function bindKeyboardReader() {
 
     if (ev.key === 'Enter' || ev.key === 'Tab') {
       if (!readerBuffer) return;
+      // リーダーは文字の直後にEnter/Tabを送る。間が空いたのは人の操作なので、
+      // 読み残しの断片で検索せず、Tabでのフォーカス移動も邪魔しない
+      if (performance.now() - readerLastKeyAt > 1000) {
+        clearReaderBuffer();
+        $('input-code').value = '';
+        return;
+      }
       ev.preventDefault();
       const code = readerBuffer;
       clearReaderBuffer();
@@ -284,6 +308,7 @@ async function startCamera() {
       });
     }
     await state.scanner.start();
+    if (!state.scanner.running) return;   // 開いている途中で停止された
     state.cameraWasOn = true;
     $('btn-torch').hidden = !state.scanner.hasTorch();
   } catch (e) {
@@ -299,6 +324,8 @@ async function startCamera() {
 function stopCamera(opts) {
   if (state.scanner) state.scanner.stop();
   $('scanner-frame').hidden = true;
+  // カメラを閉じるとライトも消える。次に開いたとき「点灯中」と表示しない
+  $('btn-torch').setAttribute('aria-pressed', 'false');
   if (!(opts && opts.keepFlag)) state.cameraWasOn = false;
 }
 
@@ -323,6 +350,7 @@ function keepaOpts() {
 
 async function lookup(query) {
   showView('result');
+  const request = ++state.lookupRequest;
   state.explorerRequest++;
   $('error-box').hidden = true;
   $('fallback-note').hidden = true;
@@ -331,15 +359,17 @@ async function lookup(query) {
   $('loading').hidden = false;
   $('loading-text').textContent = 'Keepaに問い合わせ中…';
 
-  state.jan = query.code || '';
+  // 履歴から開き直すときはASINで引くが、買取照会のためにJANは持ち越す
+  state.jan = query.code || query.jan || '';
   state.foundBy = null;
 
   try {
     const { products } = await fetchProducts(query, keepaOpts());
+    if (request !== state.lookupRequest) return;   // 待っている間に次の商品を読んだ
 
     if (products.length === 0) {
       // JANがKeepaに無い商品は珍しくないので、商品名から探し直す
-      if (query.code) return await lookupByName(query.code);
+      if (query.code) return await lookupByName(query.code, request);
       $('loading').hidden = true;
       showError(`${query.asin} の情報を取得できませんでした。`);
       return;
@@ -351,6 +381,7 @@ async function lookup(query) {
     }
     await showProduct(products[0]);
   } catch (e) {
+    if (request !== state.lookupRequest) return;
     $('loading').hidden = true;
     showError(String(e.message || e));
   }
@@ -363,17 +394,19 @@ async function lookup(query) {
  * 名前で引いた結果は「JANが一致している保証が無い」ので、1件しか出なくても
  * 黙って確定させず、必ず断り書き付きの候補として人に選ばせる。
  */
-async function lookupByName(code) {
+async function lookupByName(code, request) {
   let found;
   try {
     $('loading-text').textContent = 'Keepaに無い商品。商品名を調べています…';
     found = await fetchJanName(code, state.settings.gasUrl);
   } catch (e) {
+    if (request !== state.lookupRequest) return;
     $('loading').hidden = true;
     showError(`JAN ${code} はKeepaに登録がありませんでした。`
       + `商品名からの検索もできません（${String(e.message || e)}）`);
     return;
   }
+  if (request !== state.lookupRequest) return;
 
   try {
     // AmazonカタログがASINを返したときは推測ではないので、候補に並べず直行する
@@ -383,6 +416,7 @@ async function lookupByName(code) {
       : `「${found.term}」でKeepaを検索中…`;
     const { products } = await fetchProducts(
       byAsin ? { asin: found.asin } : { term: found.term }, keepaOpts());
+    if (request !== state.lookupRequest) return;
     $('loading').hidden = true;
     if (products.length === 0) {
       showError(byAsin
@@ -400,6 +434,7 @@ async function lookupByName(code) {
     // 商品名検索は最大40件返る。棚の前で見比べられる数に絞る
     showCandidates(products.slice(0, 12), found);
   } catch (e) {
+    if (request !== state.lookupRequest) return;
     $('loading').hidden = true;
     showError(String(e.message || e));
   }
@@ -617,6 +652,8 @@ async function showVariations(product) {
 }
 
 async function showProduct(product) {
+  // 候補の選び直しも別の商品なので、前の商品の規制結果を受け付けない
+  const request = ++state.productRequest;
   state.product = product;
   $('loading').hidden = false;
   $('loading-text').textContent = '出品規制を確認中…';
@@ -649,7 +686,9 @@ async function showProduct(product) {
   state.restriction = { status: '?', code: 'PENDING', message: '確認中' };
   renderProfitAndVerdict();
 
-  state.restriction = await fetchRestriction(product.asin, state.settings.gasUrl);
+  const restriction = await fetchRestriction(product.asin, state.settings.gasUrl);
+  if (request !== state.productRequest) return;   // 前の商品の規制で今の判定を書き換えない
+  state.restriction = restriction;
   renderProfitAndVerdict();
 }
 
@@ -947,6 +986,8 @@ function bindResultView() {
 function saveAndNext() {
   const p = state.product;
   if (!p) return;
+  // 仕入値が無いと「粗利」は手残りそのものになる。粗利として残さない
+  const costed = !!(state.profit && state.profit.cost);
   store.addHistory({
     ts: Date.now(),
     jan: state.jan,
@@ -954,9 +995,9 @@ function saveAndNext() {
     title: p.title,
     image: p.image,
     price: state.profit ? state.profit.price : null,
-    cost: state.profit ? state.profit.cost : null,
-    profit: state.profit ? state.profit.profit : null,
-    marginPct: state.profit ? state.profit.marginPct : null,
+    cost: costed ? state.profit.cost : null,
+    profit: costed ? state.profit.profit : null,
+    marginPct: costed ? state.profit.marginPct : null,
     judgeLabel: state.verdict ? judgeLabel(state.verdict) : '',
     judgeLevel: state.verdict ? state.verdict.level : '',
     restriction: state.restriction ? state.restriction.status : '?',
@@ -965,8 +1006,8 @@ function saveAndNext() {
   });
   renderHistory();
   showView('scan');
-  // 続けてスキャンできるよう、カメラを使っていたなら開き直す
-  if (state.cameraWasOn) startCamera();
+  // 続けてスキャンできるよう、カメラを使っていたなら開き直す（新版への読み直し中は開かない）
+  if (state.cameraWasOn && !reloadWhenIdle) startCamera();
 }
 
 function showError(msg) {
@@ -993,10 +1034,10 @@ function renderHistory() {
     open.innerHTML = `${x.image ? `<img src="${x.image}" alt="">` : ''}
       <span class="history-main">
         <p class="history-title">${escapeHtml(x.title || x.asin)}</p>
-        <p class="history-sub">${x.asin} · ${x.profit ? '粗利 ' + yen(x.profit) : '仕入値未入力'}
+        <p class="history-sub">${x.asin} · ${x.cost ? '粗利 ' + yen(x.profit) : '仕入値未入力'}
           · ${new Date(x.ts).toLocaleDateString('ja-JP')}</p>
       </span>`;
-    open.addEventListener('click', () => lookup({ asin: x.asin }));
+    open.addEventListener('click', () => lookup({ asin: x.asin, jan: x.jan }));
 
     const badge = document.createElement('span');
     badge.className = 'history-badge badge-' + (x.judgeLevel || 'warning');

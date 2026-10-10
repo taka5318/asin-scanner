@@ -27,13 +27,16 @@ function zxing() {
   return { Z, reader: zxingReader };
 }
 
+// どちらの読み取り器も { text, format } を返す。UPC-E は8桁でEAN-8と見分けが
+// つかないので、形式を捨てると正しいUPC-Eを検算で落としてしまう
 function decodeCanvasZxing(canvas) {
   const { Z, reader } = zxing();
   try {
     const source = new Z.HTMLCanvasElementLuminanceSource(canvas);
     const bitmap = new Z.BinaryBitmap(new Z.HybridBinarizer(source));
     const result = reader.decode(bitmap);
-    return result ? result.getText() : null;
+    if (!result) return null;
+    return { text: result.getText(), format: result.getBarcodeFormat() === Z.BarcodeFormat.UPC_E ? 'upc_e' : '' };
   } catch (e) {
     return null;   // 見つからないのは普通のこと。例外にしない
   } finally {
@@ -47,10 +50,40 @@ async function decodeCanvasNative(canvas) {
   if (!detector) detector = new window.BarcodeDetector({ formats: FORMATS });
   try {
     const found = await detector.detect(canvas);
-    return found && found.length ? found[0].rawValue : null;
+    return found && found.length ? { text: found[0].rawValue, format: found[0].format } : null;
   } catch (e) {
     return null;
   }
+}
+
+/**
+ * UPC-E（8桁: ナンバーシステム + 6桁 + チェック）をUPC-A（12桁）に戻す。
+ * チェックディジットは展開後のUPC-Aのものなので、EAN-8の重みでは検算できない。
+ * 形が合わない・検算が合わないときは '' を返す。
+ */
+export function expandUpcE(code) {
+  if (!/^[01]\d{7}$/.test(code)) return '';
+  const ns = code[0];
+  const [d1, d2, d3, d4, d5, d6] = code.slice(1, 7);
+  const check = code[7];
+  let body;
+  if ('012'.includes(d6)) body = d1 + d2 + d6 + '0000' + d3 + d4 + d5;
+  else if (d6 === '3') body = d1 + d2 + d3 + '00000' + d4 + d5;
+  else if (d6 === '4') body = d1 + d2 + d3 + d4 + '00000' + d5;
+  else body = d1 + d2 + d3 + d4 + d5 + '0000' + d6;
+  const upcA = ns + body + check;
+  return isValidGtin(upcA) ? upcA : '';
+}
+
+// 読み取った生の値を、Keepaに渡せる検算済みのコードにする。駄目なら ''
+export function toCheckedCode(text, format) {
+  let code = String(text || '').trim();
+  if (format === 'upc_e' && code.length === 8) {
+    code = expandUpcE(code);
+    if (!code) return '';
+  }
+  code = normalizeCode(code);
+  return isValidGtin(code) ? code : '';
 }
 
 /**
@@ -95,30 +128,59 @@ export class BarcodeScanner {
     this.lastCode = null;
     this.lastSeenAt = 0;
     this.track = null;
+    this.starting = null;   // 起動中の Promise。二重起動でカメラを2本開かないため
+    this.generation = 0;    // stop() のたびに進む。起動の途中で止められたかの判定に使う
   }
 
-  async start() {
-    if (this.running) return;
-    if (!isCameraAvailable()) throw new Error('このブラウザではカメラを使えません（HTTPSでない可能性）');
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: 'environment' },   // 背面カメラ
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-    });
-    this.video.srcObject = this.stream;
-    this.video.setAttribute('playsinline', '');   // iOSで全画面に乗っ取られないため必須
-    this.video.muted = true;
-    await this.video.play();
-    this.track = this.stream.getVideoTracks()[0] || null;
-    this.running = true;
-    this.onStatus('バーコードを枠に合わせてください');
-    this._loop();
+  // running はカメラが開き終わってから立つので、それだけで二重起動は防げない。
+  // 起動中は同じ Promise を返し、途中で stop() されたら開いたカメラをその場で閉じる
+  start() {
+    if (this.running) return Promise.resolve();
+    if (this.starting) return this.starting;
+    if (!isCameraAvailable()) return Promise.reject(new Error('このブラウザではカメラを使えません（HTTPSでない可能性）'));
+    const gen = ++this.generation;
+    const run = (async () => {
+      let stream = null;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },   // 背面カメラ
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        });
+        if (gen !== this.generation) return;   // 開いている間に止められた → finally で閉じる
+        this.stream = stream;
+        this.video.srcObject = stream;
+        this.video.setAttribute('playsinline', '');   // iOSで全画面に乗っ取られないため必須
+        this.video.muted = true;
+        await this.video.play();
+        if (gen !== this.generation) return;
+        this.track = stream.getVideoTracks()[0] || null;
+        this.running = true;
+        stream = null;   // ここから先は stop() が閉じる
+        this.onStatus('バーコードを枠に合わせてください');
+        this._loop();
+      } catch (e) {
+        if (gen !== this.generation) return;   // 止めたせいで play() が失敗しただけ
+        throw e;
+      } finally {
+        // 起動できなかったカメラは必ず閉じる（開きっぱなしで電池を食わせない）
+        if (stream) {
+          stream.getTracks().forEach((t) => t.stop());
+          if (this.stream === stream) { this.stream = null; this.video.srcObject = null; }
+        }
+      }
+    })();
+    this.starting = run;
+    run.finally(() => { if (this.starting === run) this.starting = null; }).catch(() => {});
+    return run;
   }
 
   stop() {
+    this.generation++;
+    this.starting = null;   // 止めた直後の start() は、古い起動を待たずに開き直す
     this.running = false;
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     this.stream = null;
@@ -167,12 +229,11 @@ export class BarcodeScanner {
     this.canvas.height = bandH;
     this.ctx.drawImage(v, 0, sy, v.videoWidth, bandH, 0, 0, v.videoWidth, bandH);
 
-    let code = await decodeCanvasNative(this.canvas);
-    if (!code) code = decodeCanvasZxing(this.canvas);
-    if (!code) return;
+    const read = (await decodeCanvasNative(this.canvas)) || decodeCanvasZxing(this.canvas);
+    if (!read) return;
 
-    code = normalizeCode(code);
-    if (!isValidGtin(code)) return;   // 検算NGは誤読として捨てる
+    const code = toCheckedCode(read.text, read.format);
+    if (!code) return;   // 検算NGは誤読として捨てる
 
     // 同じ値を2回続けて読めたときだけ確定する（1回だけの読みは信用しない）
     const now = Date.now();
@@ -197,11 +258,10 @@ export async function decodeImageFile(file) {
   canvas.height = Math.round(bitmap.height * scale);
   canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-  let code = await decodeCanvasNative(canvas);
-  if (!code) code = decodeCanvasZxing(canvas);
-  if (!code) throw new Error('写真からバーコードを読み取れませんでした');
-  code = normalizeCode(code);
-  if (!isValidGtin(code)) throw new Error('読み取れましたが値が不正です（撮り直してください）');
+  const read = (await decodeCanvasNative(canvas)) || decodeCanvasZxing(canvas);
+  if (!read) throw new Error('写真からバーコードを読み取れませんでした');
+  const code = toCheckedCode(read.text, read.format);
+  if (!code) throw new Error('読み取れましたが値が不正です（撮り直してください）');
   feedback();
   return code;
 }
