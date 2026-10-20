@@ -9,7 +9,7 @@ import { extractModelNumber, matchesModel, variationEntries } from './model.js';
 import * as store from './store.js';
 
 // 直したらここを上げる。ヘッダーに出るので「更新したつもりで古いまま」に気づける
-export const APP_VERSION = '1.6.2';
+export const APP_VERSION = '1.6.3';
 
 const ASIN_RE = /^(B[0-9A-Z]{9}|\d{9}[\dX])$/i;
 
@@ -50,6 +50,22 @@ const state = {
 
 // 新しい版が届いたが、入力の途中なので読み直しを待っている
 let reloadWhenIdle = false;
+
+// GASへの問い合わせは1回1〜3秒かかる。Keepaの応答を待たずに、分かっている分は先に聞いておく
+// （買取価格はJAN、出品規制はASINで引ける）。使うときに相手が同じなら、その応答を受け取る
+const prefetched = { kaitori: null, restriction: null };
+
+function prefetch(kind, key, start) {
+  prefetched[kind] = { key, promise: start() };
+}
+
+function takePrefetched(kind, key, start) {
+  const hit = prefetched[kind];
+  prefetched[kind] = null;
+  return hit && hit.key === key ? hit.promise : start();
+}
+
+const KAITORI_JAN = /^\d{8}$|^\d{13}$/;
 
 /* =============================== 起動 =============================== */
 
@@ -360,8 +376,13 @@ async function lookup(query) {
   $('loading-text').textContent = 'Keepaに問い合わせ中…';
 
   // 履歴から開き直すときはASINで引くが、買取照会のためにJANは持ち越す
-  state.jan = query.code || query.jan || '';
+  const jan = query.code || query.jan || '';
+  state.jan = jan;
   state.foundBy = null;
+  const gasUrl = state.settings.gasUrl;
+  prefetched.kaitori = prefetched.restriction = null;   // 前の検索で使われなかった分は古いので捨てる
+  if (KAITORI_JAN.test(jan)) prefetch('kaitori', jan, () => fetchKaitoriHistory(jan, gasUrl));
+  if (query.asin) prefetch('restriction', query.asin, () => fetchRestriction(query.asin, gasUrl));
 
   try {
     const { products } = await fetchProducts(query, keepaOpts());
@@ -686,7 +707,8 @@ async function showProduct(product) {
   state.restriction = { status: '?', code: 'PENDING', message: '確認中' };
   renderProfitAndVerdict();
 
-  const restriction = await fetchRestriction(product.asin, state.settings.gasUrl);
+  const restriction = await takePrefetched('restriction', product.asin,
+    () => fetchRestriction(product.asin, state.settings.gasUrl));
   if (request !== state.productRequest) return;   // 前の商品の規制で今の判定を書き換えない
   state.restriction = restriction;
   renderProfitAndVerdict();
@@ -730,7 +752,7 @@ async function loadKaitoriHistory(jan) {
   state.kaitori = null;
 
   const box = $('kaitori-box');
-  const validJan = /^\d{8}$|^\d{13}$/.test(String(jan || ''));
+  const validJan = KAITORI_JAN.test(String(jan || ''));
   box.hidden = !validJan;
   if (!validJan) return;
 
@@ -740,7 +762,7 @@ async function loadKaitoriHistory(jan) {
   $('kaitori-chart-box').hidden = true;
   state.charts.kaitori.setSeries([]);
 
-  const result = await fetchKaitoriHistory(jan, state.settings.gasUrl);
+  const result = await takePrefetched('kaitori', jan, () => fetchKaitoriHistory(jan, state.settings.gasUrl));
   if (request !== state.kaitoriRequest || state.jan !== jan) return;
   state.kaitori = result;
   renderKaitori(result);
@@ -886,8 +908,7 @@ function setRange(days) {
   for (const btn of $('range-tabs').querySelectorAll('button')) {
     btn.setAttribute('aria-pressed', String(Number(btn.dataset.days) === days));
   }
-  drawCharts();
-  if (state.kaitori) renderKaitori(state.kaitori);
+  drawCharts();   // 買取のグラフも drawCharts の中で描き直す
 }
 
 function seriesColor(n) {

@@ -27,12 +27,19 @@ export class TimeChart {
     this.series = [];
     this.hover = null;
     this.tooltip = null;
+    this.frame = 0;   // 次の描画を予約している requestAnimationFrame の番号
     this._bind();
   }
 
   setSeries(series) {
     this.series = (series || []).filter((s) => s.points && s.points.some((p) => p.v !== null));
     this.draw();
+  }
+
+  // 指の動き・画面幅の変化は1秒に何十回も来る。1コマに1回だけ描く
+  _scheduleDraw() {
+    if (this.frame) return;
+    this.frame = requestAnimationFrame(() => { this.frame = 0; this.draw(); });
   }
 
   setTooltipEl(el) {
@@ -45,28 +52,31 @@ export class TimeChart {
       const x = ev.clientX - rect.left;
       if (x < 0 || x > rect.width) return this._clearHover();
       this.hover = x;
-      this.draw();
+      this._scheduleDraw();
     };
     this.canvas.addEventListener('pointermove', move);
     this.canvas.addEventListener('pointerdown', move);
     this.canvas.addEventListener('pointerleave', () => this._clearHover());
     this.canvas.addEventListener('pointercancel', () => this._clearHover());
-    window.addEventListener('resize', () => this.draw());
 
-    // 非表示のまま描くと幅0の絵ができあがる。表示された/回転した瞬間に描き直す
+    // 非表示のまま描くと幅0の絵ができあがる。表示された/回転した瞬間に描き直す。
+    // スマホはスクロールでアドレスバーが出入りするたびに resize が来るので、
+    // window の resize ではなく「グラフの幅が変わったとき」だけ描き直す
     if ('ResizeObserver' in window) {
       let lastW = 0;
       new ResizeObserver((entries) => {
         const w = Math.round(entries[0].contentRect.width);
         if (w > 0 && w !== lastW) { lastW = w; this.draw(); }
       }).observe(this.canvas);
+    } else {
+      window.addEventListener('resize', () => this._scheduleDraw());
     }
   }
 
   _clearHover() {
     this.hover = null;
     if (this.tooltip) this.tooltip.hidden = true;
-    this.draw();
+    this._scheduleDraw();
   }
 
   _bounds() {
@@ -88,13 +98,16 @@ export class TimeChart {
   }
 
   draw() {
+    if (this.frame) { cancelAnimationFrame(this.frame); this.frame = 0; }
     const c = this.canvas;
     const box = c.getBoundingClientRect();
     const w = Math.max(1, box.width);
     const h = Math.max(this.opts.minHeight, box.height || this.opts.minHeight);
     const dpr = DPR();
-    c.width = Math.round(w * dpr);
-    c.height = Math.round(h * dpr);
+    // 大きさを代入すると同じ値でも描画領域を作り直すので、変わったときだけにする
+    const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+    if (c.width !== pw) c.width = pw;
+    if (c.height !== ph) c.height = ph;
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -109,6 +122,7 @@ export class TimeChart {
       ctx.fillStyle = ink;
       ctx.font = '13px system-ui, -apple-system, "Segoe UI", sans-serif';
       ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';   // 前の描画の設定が残るので毎回決める
       ctx.fillText('データがありません', w / 2, h / 2);
       return;
     }
@@ -164,19 +178,14 @@ export class TimeChart {
       ctx.lineCap = 'round';
       ctx.setLineDash(s.dashed ? [4, 4] : []);
       ctx.beginPath();
-      let pen = false;
-      for (const p of s.points) {
-        if (p.v === null) { pen = false; continue; }   // 在庫切れ期間は線を切る
-        const x = xOf(p.t), y = yOf(p.v);
-        if (!pen) { ctx.moveTo(x, y); pen = true; } else { ctx.lineTo(x, y); }
-      }
+      tracePoints(ctx, s.points, xOf, yOf, 1 / dpr);
       ctx.stroke();
       ctx.setLineDash([]);
     }
 
     // --- 最新値を線の右端に直接書く（凡例と色だけに頼らないため） ---
     for (const s of this.series) {
-      const last = [...s.points].reverse().find((p) => p.v !== null);
+      const last = lastPoint(s.points);
       if (!last) continue;
       const x = Math.min(xOf(last.t), padL + plotW);
       const y = yOf(last.v);
@@ -225,14 +234,59 @@ export class TimeChart {
   }
 }
 
-// 指定時刻の「その時点で有効だった値」。Keepaの履歴は階段状なので直近の点を拾う
-function valueAt(points, t) {
-  let v = null;
-  for (const p of points) {
-    if (p.t > t) break;
-    v = p.v;
+/**
+ * 折れ線の経路を作る。null の点で線を切る（在庫切れ期間）。
+ * 全期間のランキングは数万点あり、1画素に何十点も重なる。画素の列ごとに
+ * 「最初・最小・最大・最後」の点だけを結ぶと、見た目は同じまま線の数が画面幅の数倍で済む
+ */
+export function tracePoints(ctx, points, xOf, yOf, colWidth) {
+  let pen = false;
+  let col = NaN, n = 0;
+  let fx, fy, lx, ly, loX, loY, loI, hiX, hiY, hiI, fI, lI;
+  const to = (x, y) => {
+    if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; }
+  };
+  const flush = () => {
+    if (!n) return;
+    to(fx, fy);
+    // 最小と最大は時刻の順に結ぶ。最初・最後の点と同じなら重ねて描かない
+    const [aI, aX, aY, bI, bX, bY] = loI <= hiI
+      ? [loI, loX, loY, hiI, hiX, hiY] : [hiI, hiX, hiY, loI, loX, loY];
+    if (aI !== fI && aI !== lI) to(aX, aY);
+    if (bI !== fI && bI !== lI && bI !== aI) to(bX, bY);
+    if (lI !== fI) to(lx, ly);
+    n = 0;
+  };
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (p.v === null) { flush(); pen = false; col = NaN; continue; }
+    const x = xOf(p.t), y = yOf(p.v);
+    const c = Math.floor(x / colWidth);
+    if (c !== col) { flush(); col = c; }
+    if (!n) { fx = x; fy = y; fI = i; loX = hiX = x; loY = hiY = y; loI = hiI = i; }
+    if (y < loY) { loX = x; loY = y; loI = i; }
+    if (y > hiY) { hiX = x; hiY = y; hiI = i; }
+    lx = x; ly = y; lI = i; n++;
   }
-  return v;
+  flush();
+}
+
+function lastPoint(points) {
+  for (let i = points.length - 1; i >= 0; i--) {
+    if (points[i].v !== null) return points[i];
+  }
+  return null;
+}
+
+// 指定時刻の「その時点で有効だった値」。Keepaの履歴は階段状なので直近の点を拾う。
+// 点は時刻順に並んでいるので二分探索で探す（全期間のランキングは数万点ある）
+export function valueAt(points, t) {
+  let lo = 0, hi = points.length - 1, found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].t <= t) { found = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  return found < 0 ? null : points[found].v;
 }
 
 function fmtDate(ms, withYear) {

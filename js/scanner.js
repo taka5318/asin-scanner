@@ -3,16 +3,42 @@
 //
 //  1) BarcodeDetector（Android Chrome等のブラウザ内蔵。速くて正確）
 //  2) ZXing（同梱。iPhoneのSafariは1)が無いのでこちらを使う）
-//  の順に使う。どちらもダメな環境向けに「写真を撮って読む」経路も用意する。
+//  のどちらか一方を使う。どちらもダメな環境向けに「写真を撮って読む」経路も用意する。
 // =====================================================================
 
 const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'itf', 'code_128'];
+const ZXING_SRC = new URL('../vendor/zxing.min.js', import.meta.url).href;
+const ZXING_ERROR = 'バーコード読み取りライブラリを読み込めませんでした';
 
 let zxingReader = null;
+let zxingLoading = null;
+let zxingFailedAt = 0;
+
+// ZXingは330KBあり、起動のたびに読むと遅い。BarcodeDetectorで読める端末では一度も読まず、
+// 必要になったとき（iPhoneでカメラを開いた・写真を予備で読む）に1回だけ読み込む
+export function loadZxing() {
+  if (window.ZXing) return Promise.resolve(window.ZXing);
+  if (!zxingLoading) {
+    // 失敗した直後にカメラの毎コマで読み直さない。少し待てば電波が戻ったときに読み直せる
+    if (Date.now() - zxingFailedAt < 10000) return Promise.reject(new Error(ZXING_ERROR));
+    zxingLoading = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = ZXING_SRC;
+      script.onload = () => (window.ZXing ? resolve(window.ZXing) : reject(new Error(ZXING_ERROR)));
+      script.onerror = () => { script.remove(); reject(new Error(ZXING_ERROR)); };
+      document.head.appendChild(script);
+    }).catch((e) => {
+      zxingLoading = null;
+      zxingFailedAt = Date.now();
+      throw e;
+    });
+  }
+  return zxingLoading;
+}
 
 function zxing() {
   const Z = window.ZXing;
-  if (!Z) throw new Error('バーコード読み取りライブラリを読み込めませんでした');
+  if (!Z) throw new Error(ZXING_ERROR);
   if (!zxingReader) {
     const hints = new Map();
     hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [
@@ -45,15 +71,48 @@ function decodeCanvasZxing(canvas) {
 }
 
 let detector = null;
+let nativeSupport = null;
+let nativeBroken = false;
+
+// BarcodeDetector があっても、JANの形式に対応していない端末（読み取り部品が無い等）がある
+function nativeReady() {
+  if (!nativeSupport) {
+    nativeSupport = (async () => {
+      if (!('BarcodeDetector' in window)) return false;
+      try {
+        const formats = await window.BarcodeDetector.getSupportedFormats();
+        return Array.isArray(formats) && formats.includes('ean_13');
+      } catch (e) {
+        return false;
+      }
+    })();
+  }
+  return nativeSupport.then((ok) => ok && !nativeBroken);
+}
+
 async function decodeCanvasNative(canvas) {
-  if (!('BarcodeDetector' in window)) return null;
   if (!detector) detector = new window.BarcodeDetector({ formats: FORMATS });
   try {
     const found = await detector.detect(canvas);
     return found && found.length ? { text: found[0].rawValue, format: found[0].format } : null;
   } catch (e) {
+    nativeBroken = true;   // 使えない端末だった。以後はZXingで読む
     return null;
   }
+}
+
+/**
+ * 絵の中のバーコードを読む。使える読み取り器は1つだけ使う
+ * （カメラの毎コマで両方を回すと、Androidで処理が2倍になって電池を食う）。
+ * 写真は撮り直しが手間なので、BarcodeDetectorで読めなければZXingでも試す
+ */
+async function decodeCanvas(canvas, { retryWithZxing = false } = {}) {
+  if (await nativeReady()) {
+    const read = await decodeCanvasNative(canvas);
+    if (read || (!retryWithZxing && !nativeBroken)) return read;
+  }
+  await loadZxing();
+  return decodeCanvasZxing(canvas);
 }
 
 /**
@@ -139,6 +198,13 @@ export class BarcodeScanner {
     if (this.starting) return this.starting;
     if (!isCameraAvailable()) return Promise.reject(new Error('このブラウザではカメラを使えません（HTTPSでない可能性）'));
     const gen = ++this.generation;
+    // iPhoneはZXingの読み込みを、カメラが開くのを待つ間に済ませる。
+    // 読み込めなければ、カメラが開いた後もその理由を出しておく（読めない理由が分からないため）
+    let decoderError = '';
+    nativeReady().then((ok) => (ok ? null : loadZxing())).catch((e) => {
+      decoderError = String(e.message || e);
+      if (gen === this.generation && this.running) this.onStatus(decoderError);
+    });
     const run = (async () => {
       let stream = null;
       try {
@@ -160,7 +226,7 @@ export class BarcodeScanner {
         this.track = stream.getVideoTracks()[0] || null;
         this.running = true;
         stream = null;   // ここから先は stop() が閉じる
-        this.onStatus('バーコードを枠に合わせてください');
+        this.onStatus(decoderError || 'バーコードを枠に合わせてください');
         this._loop();
       } catch (e) {
         if (gen !== this.generation) return;   // 止めたせいで play() が失敗しただけ
@@ -225,11 +291,12 @@ export class BarcodeScanner {
     // 画面中央の帯だけを切り出して読む。全画面を毎回読むより速く、誤読も減る
     const bandH = Math.round(v.videoHeight * 0.42);
     const sy = Math.round((v.videoHeight - bandH) / 2);
-    this.canvas.width = v.videoWidth;
-    this.canvas.height = bandH;
+    // 大きさの代入は同じ値でも描画領域を作り直す。毎コマやらない
+    if (this.canvas.width !== v.videoWidth) this.canvas.width = v.videoWidth;
+    if (this.canvas.height !== bandH) this.canvas.height = bandH;
     this.ctx.drawImage(v, 0, sy, v.videoWidth, bandH, 0, 0, v.videoWidth, bandH);
 
-    const read = (await decodeCanvasNative(this.canvas)) || decodeCanvasZxing(this.canvas);
+    const read = await decodeCanvas(this.canvas);
     if (!read) return;
 
     const code = toCheckedCode(read.text, read.format);
@@ -258,7 +325,7 @@ export async function decodeImageFile(file) {
   canvas.height = Math.round(bitmap.height * scale);
   canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
 
-  const read = (await decodeCanvasNative(canvas)) || decodeCanvasZxing(canvas);
+  const read = await decodeCanvas(canvas, { retryWithZxing: true });
   if (!read) throw new Error('写真からバーコードを読み取れませんでした');
   const code = toCheckedCode(read.text, read.format);
   if (!code) throw new Error('読み取れましたが値が不正です（撮り直してください）');

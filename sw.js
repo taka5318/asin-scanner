@@ -1,5 +1,5 @@
 // オフライン用に画面を保存する。オンライン時は古い画面を返さず最新版を優先する。
-const CACHE = 'asin-scanner-v1.6.2';
+const CACHE = 'asin-scanner-v1.6.3';
 
 const SHELL = [
   './',
@@ -17,6 +17,7 @@ const SHELL = [
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
+const STATIC_PATHS = ['vendor/', 'icons/'].map((dir) => new URL(dir, self.registration.scope).pathname);
 
 self.addEventListener('install', (ev) => {
   ev.waitUntil(
@@ -42,6 +43,19 @@ self.addEventListener('fetch', (ev) => {
   const url = new URL(req.url);
   // Keepa/GASへの問い合わせは毎回ネットに行く。キャッシュすると古い相場を見てしまう
   if (url.origin !== self.location.origin) return;
+
+  // ZXing(330KB)とアイコンは版の中で変わらない。版ごとに入れ直しているので保存版を先に使い、
+  // 店内の弱い電波で毎回ダウンロードし直さない
+  if (STATIC_PATHS.some((dir) => url.pathname.startsWith(dir))) {
+    ev.respondWith(caches.open(CACHE).then(async (cache) => {
+      const saved = await cache.match(req);
+      if (saved) return saved;
+      const res = await fetch(req, { cache: 'no-store' });
+      if (res.ok) ev.waitUntil(cache.put(req, res.clone()));
+      return res;
+    }));
+    return;
+  }
 
   // ?gas= を含むURLを端末のキャッシュキーに保存しない。
   const cacheKey = req.mode === 'navigate' ? new Request(self.registration.scope) : req;
